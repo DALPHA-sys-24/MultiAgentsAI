@@ -1,8 +1,17 @@
 import tensorflow as tf
 import numpy as np
-from collections import defaultdict
+from collections import defaultdict,Counter
 from typing import Any, List, Dict,Tuple
 from matplotlib import pyplot as plt
+
+def count_values(tensor):
+    """
+    Compte le nombre d'occurrences de chaque valeur dans un tenseur 1D.
+    Retourne un dictionnaire {valeur: occurrences}.
+    """
+    x = tf.reshape(tensor, [-1]).numpy()  # flatten + numpy
+    counts = Counter(x.tolist())
+    return dict(counts)
 
 def plot_results(df_list, x_min, x_max, y_min, y_max, 
                        grid_shape=(3, 3), alpha=0.1, lw=2,

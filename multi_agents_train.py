@@ -39,7 +39,7 @@ else:
     
 if gpus:
     with tf.device('/GPU:0'):
-        for K in [5]:
+        for K in [1,3,5,7]:
             all_results = []
             print("Multiple runs for K =", K)
             train_groups_x, train_groups_y = mat.split_dataset_fully_synchronized(x_train, y_train,num_groups=K)
@@ -55,7 +55,7 @@ if gpus:
                     for r in range(R):
                         print(f"  Run {r+1}/{R}", end='\r')
                         model=mat.MultiAgentAI(k=K, hidden_size= int(h/K), lr=ARRAYS[_ID].get('rate'),input_shape=None,num_classes=10,optimizer_type='sgd',batch_size=batch_size)
-                        history=model.train_step(train_datasets=train_datasets,epochs=epochs, test_datasets=None,strategy=ARRAYS[_ID].get('strategy'),verbose=verbose,alpha=1.0, beta=0.5)
+                        history=model.train_step(train_datasets=train_datasets,epochs=epochs, test_datasets=None,strategy=ARRAYS[_ID].get('strategy'),verbose=verbose,alpha=1.0, beta=0.0)
                         accuracy = model.evaluate_ensemble(test_datasets,strategy=ARRAYS[_ID].get('strategy'),verbose=False)
                         accuracies_for_h.append(accuracy)
                         
