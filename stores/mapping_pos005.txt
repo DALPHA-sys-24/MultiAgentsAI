@@ -1,0 +1,5 @@
+POSITION=5
+ARRAY_ID=0
+PROC_ID=5
+alpha=-2.000000
+beta=-0.000000

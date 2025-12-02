@@ -1,3 +1,4 @@
+import sys
 import tensorflow as tf
 import numpy as np
 from typing import List,Tuple
@@ -420,6 +421,10 @@ class MultiAgentAI:
             rand_idx = tf.random.uniform([self.batch_size ], 0, self.k, tf.int32)
             preds_t = tf.transpose(preds, [1, 0])
             maj_targets = tf.gather_nd(preds_t, tf.stack([tf.range(self.batch_size ), rand_idx], axis=1))
+        elif strategy == "softvote":
+            probs = tf.stack([tf.nn.softmax(o, axis=-1) for o in outputs], axis=0)  # (K, B, C)
+            avg_probs = tf.reduce_mean(probs, axis=0)  # (B, C)
+            maj_targets = tf.argmax(avg_probs, axis=-1, output_type=tf.int32)
         else:
             raise ValueError(f"Unknown strategy '{strategy}'")
 
