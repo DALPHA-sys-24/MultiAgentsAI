@@ -1,14 +1,34 @@
-import sys
 import tensorflow as tf
 import numpy as np
 from typing import List,Tuple
+import matplotlib.pyplot as plt
 
 # Global Configuration
 gpu_devices = tf.config.list_physical_devices('GPU')
 on_gpu = len(gpu_devices) > 0
 tf.keras.mixed_precision.set_global_policy('float32')
 
-
+def show_images(images, titles=None):
+    """
+    Affiche une liste d'images sur une même figure.
+    
+    Parameters:
+    - images : liste de tableaux numpy ou d'images (ex: PIL.Image)
+    - titles : liste de titres (optionnel), même longueur que images
+    """
+    k = len(images)
+    plt.figure(figsize=(4*k, 4))  # largeur proportionnelle au nombre d'images
+    
+    for i, img in enumerate(images):
+        plt.subplot(1, k, i+1)     # 1 ligne, k colonnes
+        plt.imshow(img, cmap="gray")  # cmap="gray" si images en niveaux de gris
+        if titles:
+            plt.title(titles[i])
+        plt.axis("off")
+    
+    plt.show()
+    
+    
 def get_data(dataset_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Charge et normalise les données pour MNIST, Fashion MNIST ou CIFAR-10.
@@ -307,6 +327,14 @@ def create_agent(hidden_size: int = 50, num_classes: int = 10, input_shape: tupl
     layers.extend([
         tf.keras.layers.Flatten(),
         tf.keras.layers.Dense(
+            80, 
+            activation='relu',
+            use_bias=True,
+            kernel_initializer=tf.keras.initializers.HeNormal(),
+            bias_initializer='zeros',
+            name='first'
+        ),
+        tf.keras.layers.Dense(
             hidden_size, 
             activation='relu',
             use_bias=True,
@@ -421,10 +449,6 @@ class MultiAgentAI:
             rand_idx = tf.random.uniform([self.batch_size ], 0, self.k, tf.int32)
             preds_t = tf.transpose(preds, [1, 0])
             maj_targets = tf.gather_nd(preds_t, tf.stack([tf.range(self.batch_size ), rand_idx], axis=1))
-        elif strategy == "softvote":
-            probs = tf.stack([tf.nn.softmax(o, axis=-1) for o in outputs], axis=0)  # (K, B, C)
-            avg_probs = tf.reduce_mean(probs, axis=0)  # (B, C)
-            maj_targets = tf.argmax(avg_probs, axis=-1, output_type=tf.int32)
         else:
             raise ValueError(f"Unknown strategy '{strategy}'")
 
