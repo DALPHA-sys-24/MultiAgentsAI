@@ -274,358 +274,385 @@ def verify_batch_synchronization(datasets):
     except StopIteration:
         return True
 
-
-def create_agent(hidden_size: int = 50, num_classes: int = 10, input_shape: tuple = None):
-    """
-    Crée un modèle pour apprentissage personnalisé avec GradientTape.
-    
-    Architecture:
-    - Si input_shape fourni: Input → Conv2D → MaxPooling → Flatten → Dense → Dense → Softmax
-    - Si input_shape = None: Flatten → Dense → Dense → Softmax
-    
-    Args:
-        hidden_size: Nombre de neurones dans la couche cachée
-        num_classes: Nombre de classes de sortie (10 pour MNIST/CIFAR-10)
-        input_shape: Forme d'entrée optionnelle (ex: (28, 28, 1) pour MNIST)
-                    Si None, sera inférée lors du premier appel (pas de conv)
-    
-    Returns:
-        tf.keras.Model non compilé, qui retourne des probabilités
-    
-    Note:
-        Le modèle retourne directement des probabilités (softmax appliqué).
-    """
-    layers = []
-    
-    # Ajouter Input layer et couches convolutives si shape spécifiée
-    if input_shape is not None:
-        layers.append(tf.keras.layers.Input(shape=input_shape))
-        
-        # Déterminer le nombre de filtres selon le nombre de canaux d'entrée
-        num_channels = input_shape[-1] if len(input_shape) == 3 else 1
-        num_filters = 16 if num_channels == 1 else 32  # Plus de filtres pour RGB
-        
-        layers.extend([
-            tf.keras.layers.Conv2D(
-                filters=num_filters,
-                kernel_size=(3, 3),
-                strides=(1, 1),
-                padding='same',
-                activation='relu',
-                kernel_initializer=tf.keras.initializers.HeNormal(),
-                bias_initializer='zeros',
-                name='conv1'
-            ),
-            tf.keras.layers.MaxPooling2D(
-                pool_size=(2, 2),
-                strides=(2, 2),
-                padding='valid',
-                name='maxpool1'
-            )
-        ])
-    
-    layers.extend([
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(
-            80, 
-            activation='relu',
-            use_bias=True,
-            kernel_initializer=tf.keras.initializers.HeNormal(),
-            bias_initializer='zeros',
-            name='first'
-        ),
-        tf.keras.layers.Dense(
-            hidden_size, 
-            activation='relu',
-            use_bias=True,
-            kernel_initializer=tf.keras.initializers.HeNormal(),
-            bias_initializer='zeros',
-            name='hidden'
-        ),
-        tf.keras.layers.Dense(
-            num_classes,
-            use_bias=True,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(),
-            bias_initializer='zeros',
-            name='logits'
-        ),
-        tf.keras.layers.Softmax(name='probabilities')
-    ])
-    
-    model = tf.keras.Sequential(layers, name='agent')
-    return model
+# Détection GPU
+ON_GPU = len(tf.config.list_physical_devices('GPU')) > 0
 
 
 class MultiAgentAI:
-    def __init__(self, k=3, hidden_size=150, lr=1e-3,input_shape=None, num_classes=10, 
-                 optimizer_type='adamw', optimizer_kwargs=None,batch_size=100):
-        """
-        Args:
-            k: Nombre de sous-réseaux
-            hidden_size: Taille de la couche cachée
-            lr: Learning rate
-            num_classes: Nombre de classes
-            optimizer_type: Type d'optimisateur ('adamw', 'sgd', 'adam', 'rmsprop', 'adagrad')
-            optimizer_kwargs: Dict avec paramètres supplémentaires pour l'optimisateur
-        """
+    """Système multi-agents pour l'apprentissage collaboratif."""
+    # ==================== INITIALISATION ====================
+    
+    def __init__(self, k=3, hidden_size=150, lr=1e-3, input_shape=None, num_classes=10, 
+                 optimizer_type='adamw', optimizer_kwargs=None, batch_size=100):
         self.k = k
         self.batch_size = batch_size
-        self.input_shape = input_shape
+        self.input_shape = input_shape or (28, 28)
         self.num_classes = num_classes
-        self.sous_reseaux = [create_agent(hidden_size, num_classes,input_shape) for _ in range(k)]
+        self.hidden_size = hidden_size
         
-        # Paramètres par défaut selon le type d'optimisateur
-        default_kwargs = {
-            'adamw': {'beta_1': 0.9, 'beta_2': 0.96, 'epsilon': 1e-9, 
-                      'weight_decay': 1e-5, 'amsgrad': True},
+        # Création des composants
+        self.sous_reseaux = self._create_all_agents()
+        self.optims = self._create_optimizers(optimizer_type, lr, optimizer_kwargs)
+        self.loss_fn, self.kl_fn = self._create_losses()
+        self.training_history = self._init_history()
+        
+        print(f"✓ {'GPU' if ON_GPU else 'CPU'} - {k} agents - Optimiseur: {optimizer_type.upper()}")
+
+    def _create_agent(self):
+        """Crée un seul agent."""
+        inputs = tf.keras.layers.Input(shape=self.input_shape)
+        
+        if len(self.input_shape) == 3:
+            num_filters = 16 if self.input_shape[-1] == 1 else 32
+            x = tf.keras.layers.Conv2D(num_filters, (3, 3), padding='same', activation='relu',
+                                        kernel_initializer=tf.keras.initializers.HeNormal())(inputs)
+            x = tf.keras.layers.MaxPooling2D((2, 2))(x)
+            x = tf.keras.layers.Flatten()(x)
+        else:
+            x = tf.keras.layers.Flatten()(inputs)
+        
+        x = tf.keras.layers.Dense(80, activation='relu', 
+                                   kernel_initializer=tf.keras.initializers.HeNormal())(x)
+        x = tf.keras.layers.Dense(self.hidden_size, activation='relu',
+                                   kernel_initializer=tf.keras.initializers.HeNormal())(x)
+        x = tf.keras.layers.Dense(self.num_classes, 
+                                   kernel_initializer=tf.keras.initializers.GlorotUniform())(x)
+        outputs = tf.keras.layers.Softmax()(x)
+        
+        return tf.keras.Model(inputs=inputs, outputs=outputs, name='agent')
+
+    def _create_all_agents(self):
+        """Crée et initialise tous les agents."""
+        agents = [self._create_agent() for _ in range(self.k)]
+        
+        # Build explicite
+        dummy = tf.zeros([1] + list(self.input_shape))
+        for i, agent in enumerate(agents):
+            _ = agent(dummy)
+            print(f"  Agent {i}: {len(agent.trainable_variables)} variables")
+        
+        return agents
+
+    def _create_optimizers(self, optimizer_type, lr, optimizer_kwargs):
+        """Crée les optimiseurs pour chaque agent."""
+        defaults = {
+            'adamw': {'beta_1': 0.9, 'beta_2': 0.96, 'epsilon': 1e-9, 'weight_decay': 1e-5, 'amsgrad': True},
             'adam': {'beta_1': 0.9, 'beta_2': 0.999, 'epsilon': 1e-7},
             'sgd': {'momentum': 0.987, 'nesterov': True},
             'rmsprop': {'rho': 0.9, 'momentum': 0.0, 'epsilon': 1e-7},
             'adagrad': {'initial_accumulator_value': 0.1, 'epsilon': 1e-7}
         }
         
-        # Fusion des kwargs par défaut avec ceux fournis
-        opt_kwargs = default_kwargs.get(optimizer_type.lower(), {})
-        if optimizer_kwargs:
-            opt_kwargs.update(optimizer_kwargs)
+        opt_type = optimizer_type.lower()
+        kwargs = {**defaults.get(opt_type, {}), **(optimizer_kwargs or {})}
         
-        # Création de l'optimisateur de base
-        optimizer_type = optimizer_type.lower()
+        optimizer_classes = {
+            'adamw': tf.keras.optimizers.AdamW,
+            'adam': tf.keras.optimizers.Adam,
+            'sgd': tf.keras.optimizers.SGD,
+            'rmsprop': tf.keras.optimizers.RMSprop,
+            'adagrad': tf.keras.optimizers.Adagrad
+        }
         
-        if optimizer_type == 'adamw':
-            base_optim = lambda: tf.keras.optimizers.AdamW(learning_rate=lr, **opt_kwargs)
-        elif optimizer_type == 'adam':
-            base_optim = lambda: tf.keras.optimizers.Adam(learning_rate=lr, **opt_kwargs)
-        elif optimizer_type == 'sgd':
-            base_optim = lambda: tf.keras.optimizers.SGD(learning_rate=lr, **opt_kwargs)
-        elif optimizer_type == 'rmsprop':
-            base_optim = lambda: tf.keras.optimizers.RMSprop(learning_rate=lr, **opt_kwargs)
-        elif optimizer_type == 'adagrad':
-            base_optim = lambda: tf.keras.optimizers.Adagrad(learning_rate=lr, **opt_kwargs)
-        else:
-            raise ValueError(
-                f"Optimisateur '{optimizer_type}' non reconnu. "
-                f"Choisissez parmi: 'adamw', 'adam', 'sgd', 'rmsprop', 'adagrad'"
-            )
+        if opt_type not in optimizer_classes:
+            raise ValueError(f"Optimisateur '{optimizer_type}' non reconnu.")
         
-        # Application du LossScaleOptimizer si GPU
-        if on_gpu:
-            print("Pas de precision mixte - Pas de LossScaleOptimizer.")
-            self.optims = [base_optim() for _ in range(k)]
-            print(f"✓ GPU détecté - Optimisateur: {optimizer_type.upper()}")
-        else:
-            self.optims = [base_optim() for _ in range(k)]
-            print(f"✓ CPU détecté - Optimisateur: {optimizer_type.upper()}")
-            
-            
-        
-        # Loss avec from_logits=False car le modèle retourne des probas
-        self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False,reduction="sum_over_batch_size")
-        self.kl_fn = tf.keras.losses.KLDivergence(reduction="sum_over_batch_size")
-        self.training_history = {
-            "losses": [[] for _ in range(k)],
-            "accuracies": [[] for _ in range(k)],
+        return [optimizer_classes[opt_type](learning_rate=lr, **kwargs) for _ in range(self.k)]
+
+    def _create_losses(self):
+        """Crée les fonctions de loss."""
+        loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(
+            from_logits=False, 
+            reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
+        )
+        kl_fn = tf.keras.losses.KLDivergence(
+            reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
+        )
+        return loss_fn, kl_fn
+
+    def _init_history(self):
+        """Initialise l'historique d'entraînement."""
+        return {
+            "losses": [[] for _ in range(self.k)],
+            "accuracies": [[] for _ in range(self.k)],
             "ensemble_accuracy": []
         }
 
-    @tf.function
-    def cross_information(self, outputs, targets, strategy="majority", alpha=0.5, beta=0.0):
+    # ==================== FORWARD / CALL ====================
 
-        targets = tf.cast(targets, tf.int32)
-        batch_size = tf.shape(outputs[0])[0]
-        self.batch_size = batch_size
+    def __call__(self, x_batch_list, training=False):
+        """Forward pass pour tous les agents."""
+        return [self.sous_reseaux[i](x_batch_list[i], training=training) for i in range(self.k)]
+
+    def call_no_grad(self, x_batch_list):
+        """Forward pass sans gradient pour tous les agents."""
+        return [tf.stop_gradient(self.sous_reseaux[i](x_batch_list[i], training=False)) for i in range(self.k)]
+
+    def predict(self, x_batch_list):
+        """Prédit les classes pour chaque agent."""
+        outputs = self(x_batch_list, training=False)
+        return [tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs]
+
+    # ==================== CONSENSUS ====================
+
+    def _hard_majority(self, outputs):
+        """Vote majoritaire hard : one-hot sur la classe la plus votée."""
+        # Prédictions de chaque agent [K, batch]
+        preds = tf.stack([tf.argmax(o, axis=-1) for o in outputs], axis=0)
         
-        if self.k == 1:
-            return tf.stack([self.loss_fn(targets, outputs[0])])
+        # Comptage des votes [batch, num_classes]
+        votes = tf.reduce_sum(tf.one_hot(preds, depth=self.num_classes), axis=0)
+        
+        # Classe majoritaire -> one-hot
+        majority_class = tf.argmax(votes, axis=-1)
+        return tf.one_hot(majority_class, depth=self.num_classes)
 
-        # 1. prédictions
-        preds = tf.stack([tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs], axis=0)
+    def _soft_majority(self, outputs, temperature):
+        """Vote majoritaire soft avec Gumbel-Softmax."""
+        avg_probs = tf.reduce_mean(tf.stack(outputs, axis=0), axis=0)
+        return self._gumbel_softmax(avg_probs, temperature=temperature, hard=True)
 
-        if strategy == "majority":
-            onehot = tf.one_hot(preds, depth=self.num_classes)
-            votes = tf.reduce_sum(onehot, axis=0)
-            maj_targets = tf.argmax(votes, axis=-1, output_type=tf.int32)
+    def _random_vote(self, outputs, batch_size, temperature):
+        """Sélection aléatoire d'un agent."""
+        probs = tf.stack(outputs, axis=0)
+        rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
+        indices = tf.stack([rand_idx, tf.range(batch_size)], axis=1)
+        selected_probs = tf.gather_nd(probs, indices)
+        return self._gumbel_softmax(selected_probs, temperature=temperature, hard=True)
+
+    @staticmethod
+    def _gumbel_softmax(probs, temperature=0.1, hard=True):
+        """Gumbel-Softmax : approximation différentiable de argmax."""
+        logits = tf.math.log(probs + 1e-8)
+        uniform = tf.random.uniform(tf.shape(logits), minval=1e-8, maxval=1.0)
+        gumbel_noise = -tf.math.log(-tf.math.log(uniform))
+        y_soft = tf.nn.softmax((logits + gumbel_noise) / temperature)
+        
+        if hard:
+            y_hard = tf.one_hot(tf.argmax(y_soft, axis=-1), depth=tf.shape(logits)[-1])
+            y_hard = tf.cast(y_hard, y_soft.dtype)
+            return y_hard - tf.stop_gradient(y_soft) + y_soft
+        
+        return y_soft
+
+    def compute_consensus(self, outputs, batch_size, strategy="majority_hard", temperature=0.1):
+        """
+        Calcule la cible de consensus selon la stratégie.
+        
+        Strategies:
+            - "majority_hard": Vote majoritaire dur (défaut)
+            - "majority_soft": Moyenne des probas + Gumbel-Softmax
+            - "vote": Sélection aléatoire d'un agent
+        """
+        if strategy == "majority_hard":
+            consensus = self._hard_majority(outputs)
+        elif strategy == "majority_soft":
+            consensus = self._soft_majority(outputs, temperature)
         elif strategy == "vote":
-            rand_idx = tf.random.uniform([self.batch_size ], 0, self.k, tf.int32)
-            preds_t = tf.transpose(preds, [1, 0])
-            maj_targets = tf.gather_nd(preds_t, tf.stack([tf.range(self.batch_size ), rand_idx], axis=1))
+            consensus = self._random_vote(outputs, batch_size, temperature)
         else:
-            raise ValueError(f"Unknown strategy '{strategy}'")
+            raise ValueError(f"Unknown strategy '{strategy}'. Use 'majority_hard', 'majority_soft' or 'vote'.")
+        
+        return tf.stop_gradient(consensus)
 
-        # 2. losses locales
-        L_i = tf.stack([self.loss_fn(targets, o) for o in outputs])
+    # ==================== LOSSES ====================
 
-        # 3. consensus
-        L_loc = tf.stack([self.loss_fn(maj_targets, o) for o in outputs])
+    def soft_cross_entropy(self, soft_targets, probs):
+        """Cross-entropy avec cibles soft."""
+        log_probs = tf.math.log(probs + 1e-8)
+        return -tf.reduce_mean(tf.reduce_sum(soft_targets * log_probs, axis=-1))
 
-        # 4. divergence (seulement si k>1)
-        # KL déjà scalaire par reduction="sum_over_batch_size"
-        loss_div_list = []
-        for i in range(self.k):
-            div_i = tf.reduce_mean([self.kl_fn(outputs[i], outputs[j]) for j in range(self.k) if j != i])
-            div_i = tf.math.multiply_no_nan(div_i, 1.0)
-            loss_div_list.append(div_i)
-        loss_div = tf.stack(loss_div_list)
+    def compute_divergence(self, output_i, other_outputs):
+        """Divergence KL entre un agent et les autres."""
+        kl_sum = sum(self.kl_fn(output_i, other) for other in other_outputs)
+        return kl_sum / float(len(other_outputs))
 
-        # 5. final
-        losses = L_i * (L_i + alpha * L_loc + beta * loss_div)
-        return losses
+    def compute_agent_loss(self, output_i, targets, consensus_target, other_outputs, alpha, beta):
+        """Calcule la loss totale pour un agent."""
+        L_sup = self.loss_fn(targets, output_i)
+        L_cons = self.soft_cross_entropy(consensus_target, output_i) if alpha > 0 and self.k > 1 else 0.0
+        L_div = self.compute_divergence(output_i, other_outputs) if beta > 0 and self.k > 1 else 0.0
+        
+        return L_sup * (L_sup + alpha * L_cons + beta * L_div)
 
-    @tf.function
-    def train_step_batch(self, x_batch_list, y_batch_list, strategy="majority", alpha=0.5, beta=0.1):
+    # ==================== TRAINING ====================
+
+    def _train_single_agent(self, i, x_input, targets, consensus_target, other_outputs, alpha, beta):
+        """Entraîne un seul agent."""
+        with tf.GradientTape() as tape:
+            output_i = self.sous_reseaux[i](x_input, training=True)
+            loss = self.compute_agent_loss(output_i, targets, consensus_target, other_outputs, alpha, beta)
+        
+        grads = tape.gradient(loss, self.sous_reseaux[i].trainable_variables)
+        
+        if grads and not all(g is None for g in grads):
+            self.optims[i].apply_gradients(zip(grads, self.sous_reseaux[i].trainable_variables))
+        
+        return loss, output_i
+
+    def train_step_batch(self, x_batch_list, y_batch_list, strategy="majority_hard", alpha=0.5, beta=0.1, temperature=0.1):
+        """Un pas d'entraînement pour tous les agents."""
         targets = tf.cast(y_batch_list[0], tf.int32)
-        gradients_list = []
-    
-        # --- Calcul des gradients pour chaque sous-réseau ---
+        batch_size = tf.shape(x_batch_list[0])[0]
+        
+        # Forward sans gradient pour consensus
+        all_outputs_no_grad = self.call_no_grad(x_batch_list)
+        consensus_target = self.compute_consensus(all_outputs_no_grad, batch_size, strategy, temperature)
+        
+        # Entraîner chaque agent
+        all_losses, all_outputs = [], []
         for i in range(self.k):
-            with tf.GradientTape() as tape:
-                # Forward partagé : un seul calcul pour tous les agents
-                outputs = [
-                    self.sous_reseaux[j](x_batch_list[j], training=True)
-                    for j in range(self.k)
-                ]
-                # Loss vectorielle par agent
-                losses = self.cross_information(
-                    outputs, targets, strategy=strategy,
-                    alpha=alpha, beta=beta)
-    
-                # Loss du modèle i (scalaire)
-                loss_i = losses[i]
-                grads = tape.gradient(loss_i, self.sous_reseaux[i].trainable_variables)
-            gradients_list.append(grads)
-    
-        # --- Application des gradients pour chaque agent ---
+            other_outputs = [all_outputs_no_grad[j] for j in range(self.k) if j != i]
+            loss, output = self._train_single_agent(
+                i, x_batch_list[i], targets, consensus_target, other_outputs, alpha, beta
+            )
+            all_losses.append(loss)
+            all_outputs.append(output)
+        
+        return all_losses, all_outputs
+
+    # ==================== METRICS ====================
+
+    def compute_accuracy(self, outputs, targets):
+        """Calcule l'accuracy pour chaque agent."""
+        targets = tf.cast(targets, tf.int32)
+        return [
+            float(tf.reduce_mean(tf.cast(tf.equal(tf.argmax(o, axis=-1, output_type=tf.int32), targets), tf.float32)))
+            for o in outputs
+        ]
+
+    def _update_history(self, epoch_losses, epoch_accs, test_acc=None):
+        """Met à jour l'historique d'entraînement."""
         for i in range(self.k):
-            self.optims[i].apply_gradients(
-                zip(gradients_list[i], self.sous_reseaux[i].trainable_variables))
-    
-        # --- Monitoring : forward en mode inference ---
-        final_outputs = [
-            self.sous_reseaux[i](x_batch_list[i], training=False)
-            for i in range(self.k)]
-    
-        per_model_losses = self.cross_information(
-            final_outputs, targets, strategy=strategy,
-            alpha=alpha, beta=beta)
-    
-        return per_model_losses, final_outputs
+            self.training_history["losses"][i].append(np.mean(epoch_losses[i]))
+            self.training_history["accuracies"][i].append(np.mean(epoch_accs[i]))
+        
+        if test_acc is not None:
+            self.training_history["ensemble_accuracy"].append(test_acc)
 
+    def _print_epoch(self, epoch, epochs, mean_losses, mean_accs, test_acc, strategy):
+        """Affiche les résultats d'une epoch."""
+        print(f"\nEpoch {epoch+1}/{epochs}")
+        for i in range(self.k):
+            print(f"  Agent {i+1} - Loss: {mean_losses[i]:.4f}, Acc: {mean_accs[i]:.4f}")
+        if test_acc is not None:
+            print(f"  Ensemble Test Accuracy ({strategy}): {test_acc:.4f}")
 
-    def train_step(self, train_datasets, epochs=10, test_datasets=None, strategy="majority", verbose=True,alpha=0.5, beta=0.1):
+    # ==================== MAIN TRAINING LOOP ====================
+
+    def train_step(self, train_datasets, epochs=10, test_datasets=None, strategy="majority_hard", 
+                   verbose=True, alpha=0.5, beta=0.1, temperature=0.1):
+        """Boucle d'entraînement principale."""
         for epoch in range(epochs):
-            epoch_losses, epoch_accs = [[] for _ in range(self.k)], [[] for _ in range(self.k)]
+            epoch_losses = [[] for _ in range(self.k)]
+            epoch_accs = [[] for _ in range(self.k)]
+            
             for batches in zip(*train_datasets):
                 x_batch_list = [b[0] for b in batches]
                 y_batch_list = [b[1] for b in batches]
-                losses, outputs = self.train_step_batch(x_batch_list, y_batch_list, strategy=strategy,alpha=alpha, beta=beta)
-
-                targets = tf.cast(y_batch_list[0], tf.int32)
+                
+                losses, outputs = self.train_step_batch(
+                    x_batch_list, y_batch_list, strategy, alpha, beta, temperature
+                )
+                
+                accs = self.compute_accuracy(outputs, y_batch_list[0])
                 for i in range(self.k):
-                    preds = tf.argmax(outputs[i], axis=-1, output_type=tf.int32)
-                    acc = tf.reduce_mean(tf.cast(tf.equal(targets, preds), tf.float32))
                     epoch_losses[i].append(float(losses[i]))
-                    epoch_accs[i].append(float(acc))
-
+                    epoch_accs[i].append(accs[i])
+            
             mean_losses = [np.mean(epoch_losses[i]) for i in range(self.k)]
             mean_accs = [np.mean(epoch_accs[i]) for i in range(self.k)]
-            for i in range(self.k):
-                self.training_history["losses"][i].append(mean_losses[i])
-                self.training_history["accuracies"][i].append(mean_accs[i])
-
-            test_acc = None
-            if test_datasets is not None:
-                test_acc = self.evaluate_ensemble(test_datasets, strategy=strategy, verbose=False)
-                self.training_history["ensemble_accuracy"].append(test_acc)
-
+            
+            test_acc = self.evaluate_ensemble(test_datasets, strategy, verbose=False) if test_datasets else None
+            self._update_history(epoch_losses, epoch_accs, test_acc)
+            
             if verbose:
-                print(f"\nEpoch {epoch+1}/{epochs}")
-                for i in range(self.k):
-                    print(f"  Agent {i+1} - Loss: {mean_losses[i]:.4f}, Acc: {mean_accs[i]:.4f}")
-                if test_acc is not None:
-                    print(f"  Ensemble Test Accuracy: {test_acc:.4f}")
-
+                self._print_epoch(epoch, epochs, mean_losses, mean_accs, test_acc, strategy)
+        
         return self.training_history
 
+    # ==================== EVALUATION ====================
 
-    def evaluate_ensemble(self, test_datasets, strategy="majority", verbose=True):
+    def _ensemble_predict_majority(self, preds):
+        """Vote majoritaire."""
+        votes = tf.one_hot(tf.stack(preds), depth=self.num_classes)
+        return tf.argmax(tf.reduce_sum(votes, axis=0), axis=-1, output_type=tf.int32)
 
-        all_preds_ensemble = []
-        all_trues = []
+    def _ensemble_predict_vote(self, preds, batch_size):
+        """Sélection aléatoire."""
+        rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
+        preds_stack = tf.stack(preds, axis=1)
+        return tf.gather_nd(preds_stack, tf.stack([tf.range(batch_size), rand_idx], axis=1))
+
+    def ensemble_predict(self, preds, strategy, batch_size):
+        """Prédiction d'ensemble selon la stratégie."""
+        if strategy in ["majority_hard", "majority_soft"]:
+            return self._ensemble_predict_majority(preds)
+        elif strategy == "vote":
+            return self._ensemble_predict_vote(preds, batch_size)
+        else:
+            raise ValueError(f"Unknown strategy '{strategy}'.")
+
+    def evaluate_ensemble(self, test_datasets, strategy="majority_hard", verbose=True):
+        """Évaluation de l'ensemble."""
+        all_preds_ensemble, all_trues = [], []
         all_preds_agents = [[] for _ in range(self.k)]
-
+        
         for batches in zip(*test_datasets):
             x_batches = [b[0] for b in batches]
             y_batch = tf.cast(batches[0][1], tf.int32)
-
-            # Forward pour tous les agents
-            outputs = [self.sous_reseaux[i](x_batches[i], training=False) for i in range(self.k)]
-            preds = [tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs]
-
-            # Stocke les prédictions par agent
+            batch_size = tf.shape(y_batch)[0]
+            
+            preds = self.predict(x_batches)
+            ensemble_pred = self.ensemble_predict(preds, strategy, batch_size)
+            
             for i in range(self.k):
                 all_preds_agents[i].append(preds[i])
-
-            # Vote pour l'ensemble
-            if strategy == "majority":
-                votes = tf.one_hot(tf.stack(preds), depth=self.num_classes)
-                votes_sum = tf.reduce_sum(votes, axis=0)
-                ensemble_pred = tf.argmax(votes_sum, axis=-1, output_type=tf.int32)
-            elif strategy == "vote":
-                batch_size = tf.shape(preds[0])[0]
-                rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
-                preds_stack = tf.stack(preds, axis=1)
-                ensemble_pred = tf.gather_nd(preds_stack, tf.stack([tf.range(batch_size), rand_idx], axis=1))
-
+            
             all_preds_ensemble.append(ensemble_pred)
             all_trues.append(y_batch)
-
-        # Concaténation
+        
+        # Calcul accuracy
         all_trues = tf.concat(all_trues, axis=0)
         all_preds_ensemble = tf.concat(all_preds_ensemble, axis=0)
-        all_preds_agents = [tf.concat(all_preds_agents[i], axis=0) for i in range(self.k)]
-
-        # Accuracies
-        acc_ensemble = tf.reduce_mean(tf.cast(tf.equal(all_preds_ensemble, all_trues), tf.float32))
+        acc_ensemble = float(tf.reduce_mean(tf.cast(tf.equal(all_preds_ensemble, all_trues), tf.float32)))
+        
         if verbose:
-            print("\nEvaluation des agents :")
-            for i in range(self.k):
-                acc_i = tf.reduce_mean(tf.cast(tf.equal(all_preds_agents[i], all_trues), tf.float32))
-                print(f"  Agent {i+1} - Acc: {float(acc_i):.4f}")
-            print(f"  Ensemble ({strategy}) - Acc: {float(acc_ensemble):.4f}")
+            self._print_evaluation(all_preds_agents, all_trues, acc_ensemble, strategy)
+        
+        return acc_ensemble
 
-        return float(acc_ensemble)
+    def _print_evaluation(self, all_preds_agents, all_trues, acc_ensemble, strategy):
+        """Affiche les résultats d'évaluation."""
+        print("\nEvaluation des agents :")
+        for i in range(self.k):
+            preds_i = tf.concat(all_preds_agents[i], axis=0)
+            acc_i = float(tf.reduce_mean(tf.cast(tf.equal(preds_i, all_trues), tf.float32)))
+            print(f"  Agent {i+1} - Acc: {acc_i:.4f}")
+        print(f"  Ensemble ({strategy}) - Acc: {acc_ensemble:.4f}")
 
-    
+    # ==================== ENTROPY ====================
+
+    def _compute_single_entropy(self, pred):
+        """Calcule l'entropie d'une seule prédiction."""
+        _, _, counts = tf.unique_with_counts(pred)
+        probs = tf.cast(counts, tf.float32) / tf.cast(tf.reduce_sum(counts), tf.float32)
+        return -tf.reduce_sum(probs * tf.math.log(probs + 1e-8)) / tf.math.log(tf.cast(self.k, tf.float32))
+
     def entropy_ensemble(self, test_datasets):
+        """Calcule l'entropie des prédictions de l'ensemble."""
         all_preds = []
-
+        
         for batches in zip(*test_datasets):
             x_batches = [b[0] for b in batches]
-            outputs = [self.sous_reseaux[i](x_batches[i], training=False) for i in range(self.k)]
-            preds = [tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs]
-            preds = tf.stack(preds, axis=1)  # shape (batch, k)
-            all_preds.append(preds)
-
-        all_preds = tf.concat(all_preds, axis=0)  # shape (N, k)
-        N = tf.shape(all_preds)[0]
-
-        entropies = []
-        for i in range(N):
-            pred_i = all_preds[i]  # shape (k,)
-            values, _, counts = tf.unique_with_counts(pred_i)
-            probs = tf.cast(counts, tf.float32) / tf.cast(tf.reduce_sum(counts), tf.float32)
-            ent = -tf.reduce_sum(probs * tf.math.log(probs)) / tf.math.log(tf.cast(self.k, tf.float32))
-            entropies.append(ent)
-
-        entropies = tf.stack(entropies)  # shape (N,)
-        return entropies
+            preds = self.predict(x_batches)
+            all_preds.append(tf.stack(preds, axis=1))
+        
+        all_preds = tf.concat(all_preds, axis=0)
+        return tf.stack([self._compute_single_entropy(all_preds[i]) for i in range(tf.shape(all_preds)[0])])
 
 
+# ==================== TEST ====================
 
-
-
-
-
-    
-if __name__ == '__main__':
-    pass
+if __name__ == "__main__":
+    pass  # Tests unitaires peuvent être ajoutés ici
