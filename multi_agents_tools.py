@@ -1,99 +1,329 @@
 import tensorflow as tf
 import numpy as np
-from typing import List,Tuple
+from typing import List, Tuple
 import matplotlib.pyplot as plt
 
-# Global Configuration
+# ---------------------------------------------------------------------
+# Global configuration
+# ---------------------------------------------------------------------
 gpu_devices = tf.config.list_physical_devices('GPU')
 on_gpu = len(gpu_devices) > 0
 tf.keras.mixed_precision.set_global_policy('float32')
 
+def plot_heatmap(df_results, heatmap_type='c_j', fixed_param_values=None, 
+                 metric='accuracy_median', figsize=None, cmap='RdYlGn', 
+                 annot=True, save=False, filename=None):
+    """
+    Trace des heatmaps d'accuracy selon le type choisi.
+    
+    Parameters
+    ----------
+    metric : str
+        Métrique à afficher : 'accuracy_median', 'accuracy_mean', 'accuracy_std', etc.
+    """
+    
+    config = {
+        'c_j': {
+            'index': 'j_augment',
+            'columns': 'c_test_class',
+            'fixed': 'hidden_dim',
+            'index_label': 'j (augmentation)',
+            'columns_label': 'Classe (c)',
+            'fixed_label': 'Hidden Dim'
+        },
+        'c_hidden': {
+            'index': 'hidden_dim',
+            'columns': 'c_test_class',
+            'fixed': 'j_augment',
+            'index_label': 'Hidden Dim',
+            'columns_label': 'Classe (c)',
+            'fixed_label': 'j'
+        },
+        'j_hidden': {
+            'index': 'hidden_dim',
+            'columns': 'j_augment',
+            'fixed': 'c_test_class',
+            'index_label': 'Hidden Dim',
+            'columns_label': 'j (augmentation)',
+            'fixed_label': 'Classe'
+        }
+    }
+    
+    if heatmap_type not in config:
+        raise ValueError(f"heatmap_type doit être parmi {list(config.keys())}")
+    
+    cfg = config[heatmap_type]
+    
+    if fixed_param_values is None:
+        fixed_param_values = sorted(df_results[cfg['fixed']].unique())
+    
+    n_plots = len(fixed_param_values)
+    n_cols = min(4, n_plots)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+    
+    if figsize is None:
+        figsize = (5 * n_cols, 4 * n_rows)
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+    
+    for idx in range(n_plots, len(axes)):
+        axes[idx].set_visible(False)
+    
+    for idx, fixed_val in enumerate(fixed_param_values):
+        ax = axes[idx]
+        
+        df_filtered = df_results[df_results[cfg['fixed']] == fixed_val]
+        
+        df_pivot = df_filtered.pivot_table(
+            index=cfg['index'],
+            columns=cfg['columns'],
+            values=metric,
+            aggfunc='mean'
+        )
+        
+        sns.heatmap(
+            df_pivot,
+            annot=annot,
+            fmt='.2f',
+            cmap=cmap,
+            vmin=0,
+            vmax=1,
+            ax=ax,
+            cbar=True,
+            annot_kws={'size': 8},
+            linewidths=0.5
+        )
+        
+        ax.set_title(f'{cfg["fixed_label"]} = {fixed_val}', fontsize=12, fontweight='bold')
+        ax.set_xlabel(cfg['columns_label'], fontsize=10)
+        ax.set_ylabel(cfg['index_label'] if idx % n_cols == 0 else '', fontsize=10)
+    
+    metric_name = metric.replace('accuracy_', '').capitalize()
+    title_map = {
+        'c_j': f'Accuracy ({metric_name}): Classe (c) vs Augmentation (j)',
+        'c_hidden': f'Accuracy ({metric_name}): Classe (c) vs Hidden Dim',
+        'j_hidden': f'Accuracy ({metric_name}): Augmentation (j) vs Hidden Dim'
+    }
+    fig.suptitle(title_map[heatmap_type], fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.tight_layout()
+    
+    if save:
+        if filename is None:
+            filename = f'heatmap_{heatmap_type}_{metric}.png'
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        print(f"Figure sauvegardée: {filename}")
+    
+    plt.show()
+    
+    return fig, axes
+# ---------------------------------------------------------------------
+# Utilities: affichage
+# ---------------------------------------------------------------------
 def show_images(images, titles=None):
     """
     Affiche une liste d'images sur une même figure.
-    
+
     Parameters:
     - images : liste de tableaux numpy ou d'images (ex: PIL.Image)
     - titles : liste de titres (optionnel), même longueur que images
     """
     k = len(images)
-    plt.figure(figsize=(4*k, 4))  # largeur proportionnelle au nombre d'images
-    
+    plt.figure(figsize=(4 * k, 4))  # largeur proportionnelle au nombre d'images
+
     for i, img in enumerate(images):
-        plt.subplot(1, k, i+1)     # 1 ligne, k colonnes
-        plt.imshow(img, cmap="gray")  # cmap="gray" si images en niveaux de gris
+        plt.subplot(1, k, i + 1)  # 1 ligne, k colonnes
+        plt.imshow(img, cmap="gray")
         if titles:
             plt.title(titles[i])
         plt.axis("off")
-    
+
     plt.show()
-    
-    
-def get_data(dataset_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+
+def inverse_transform(
+    x: np.ndarray,
+    input_shape: Tuple[int, ...],
+    c: int = 10
+) -> np.ndarray:
     """
-    Charge et normalise les données pour MNIST, Fashion MNIST ou CIFAR-10.
+    Inverse de la transformation appliquée dans get_data:
+    - Retire les c derniers éléments (vecteur one-hot)
+    - Reshape en input_shape original
+
+    Args:
+        x: Données aplaties avec vecteur one-hot (shape: (n_samples, flattened_size + c))
+        input_shape: Shape original des images (ex: (28, 28) pour MNIST, (32, 32, 3) pour CIFAR)
+        c: Nombre d'éléments à retirer à la fin (défaut: 10 pour le one-hot)
+
+    Returns:
+        Images reshapées en input_shape (shape: (n_samples, *input_shape))
+    """
+    # Retirer les c derniers éléments
+    x_without_onehot = x[:, :-c]
     
-    Les images sont normalisées entre [0, 1] et les labels sont aplatis 
-    en vecteurs 1D de type int32.
+    # Reshape en input_shape
+    x_reshaped = x_without_onehot.reshape(-1, *input_shape)
+    
+    return x_reshaped
+
+
+def inverse_transform_single(
+    x: np.ndarray,
+    input_shape: Tuple[int, ...],
+    c: int = 10
+) -> np.ndarray:
+    """
+    Version pour une seule image.
+
+    Args:
+        x: Image aplatie avec vecteur one-hot (shape: (flattened_size + c,))
+        input_shape: Shape original de l'image
+        c: Nombre d'éléments à retirer
+
+    Returns:
+        Image reshapée en input_shape
+    """
+    # Retirer les c derniers éléments
+    x_without_onehot = x[:-c]
+    
+    # Reshape en input_shape
+    x_reshaped = x_without_onehot.reshape(input_shape)
+    
+    return x_reshaped
+# ---------------------------------------------------------------------
+# Data loading / preprocessing
+# ---------------------------------------------------------------------
+# def get_data(dataset_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+#     """
+#     Charge et normalise les données pour MNIST, Fashion MNIST ou CIFAR-10.
+
+#     Returns:
+#         (x_train, y_train, x_test, y_test)
+#     """
+#     dataset_name = dataset_name.lower()
+
+#     if dataset_name in ['mnist', 'fashion_mnist']:
+#         loader = tf.keras.datasets.mnist if dataset_name == 'mnist' else tf.keras.datasets.fashion_mnist
+#         (x_train, y_train), (x_test, y_test) = loader.load_data()
+#         # Ajouter la dimension canal pour grayscale
+#         x_train = x_train[..., np.newaxis]
+#         x_test = x_test[..., np.newaxis]
+
+#     elif dataset_name == 'cifar10':
+#         (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
+#         # CIFAR-10 a déjà (32,32,3)
+
+#     else:
+#         raise ValueError(f"Dataset '{dataset_name}' non reconnu. Utilisez 'mnist', 'fashion_mnist' ou 'cifar10'.")
+
+#     # Normalisation [0,255] -> [0,1]
+#     x_train = x_train.astype(np.float32) / 255.0
+#     x_test = x_test.astype(np.float32) / 255.0
+
+#     # Aplatir les labels
+#     y_train = y_train.flatten().astype(np.int32)
+#     y_test = y_test.flatten().astype(np.int32)
+
+#     return x_train, y_train, x_test, y_test
+import numpy as np
+import tensorflow as tf
+from typing import Tuple
+
+
+import numpy as np
+import tensorflow as tf
+from typing import Tuple, Optional, List, Union
+
+
+def get_data(
+    dataset_name: str, 
+    j: Optional[int] = None, 
+    num_classes: int = 10,
+    filter_class: Optional[Union[int, List[int]]] = None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Charge, normalise et aplati les données pour MNIST, Fashion MNIST ou CIFAR-10.
+    Peut filtrer par classe et ajouter un vecteur one-hot.
 
     Args:
         dataset_name: Nom du dataset ('mnist', 'fashion_mnist', 'cifar10')
+        j: Position du 1 dans le vecteur one-hot (0 à num_classes-1). 
+           Si None, aucun vecteur n'est ajouté.
+        num_classes: Nombre de classes (taille du vecteur one-hot)
+        filter_class: Classe(s) à extraire. Peut être:
+           - Un entier (ex: 3) pour extraire une seule classe
+           - Une liste (ex: [0, 1, 5]) pour extraire plusieurs classes
+           - None pour garder toutes les classes
 
     Returns:
-        Tuple contenant (x_train, y_train, x_test, y_test)
-        - x_train, x_test: Images normalisées (float32)
-        - y_train, y_test: Labels aplatis (int32)
-        
-    Raises:
-        ValueError: Si le nom du dataset n'est pas reconnu
+        (x_train, y_train, x_test, y_test)
     """
     dataset_name = dataset_name.lower()
 
-    # Chargement du dataset
     if dataset_name in ['mnist', 'fashion_mnist']:
-        loader = (tf.keras.datasets.mnist if dataset_name == 'mnist' 
-                  else tf.keras.datasets.fashion_mnist)
+        loader = tf.keras.datasets.mnist if dataset_name == 'mnist' else tf.keras.datasets.fashion_mnist
         (x_train, y_train), (x_test, y_test) = loader.load_data()
-        # Ajout de la dimension canal pour grayscale: (28,28) → (28,28,1)
-        x_train = x_train[..., np.newaxis]
-        x_test = x_test[..., np.newaxis]
-        
+
     elif dataset_name == 'cifar10':
         (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
-        # CIFAR-10 a déjà 3 canaux: (32,32,3)
-        
+
     else:
-        raise ValueError(
-            f"Dataset '{dataset_name}' non reconnu. "
-            f"Utilisez 'mnist', 'fashion_mnist' ou 'cifar10'."
-        )
+        raise ValueError(f"Dataset '{dataset_name}' non reconnu. Utilisez 'mnist', 'fashion_mnist' ou 'cifar10'.")
 
-    # Normalisation des images [0, 255] → [0, 1]
-    x_train = x_train.astype(np.float32) / 255.0
-    x_test = x_test.astype(np.float32) / 255.0
-
-    # Aplatissement des labels en vecteur 1D
+    # Aplatir les labels
     y_train = y_train.flatten().astype(np.int32)
     y_test = y_test.flatten().astype(np.int32)
 
+    # Filtrer par classe si spécifié
+    if filter_class is not None:
+        # Convertir en liste si c'est un entier
+        if isinstance(filter_class, int):
+            filter_class = [filter_class]
+        
+        # Créer les masques pour train et test
+        train_mask = np.isin(y_train, filter_class)
+        test_mask = np.isin(y_test, filter_class)
+        
+        # Appliquer les masques
+        x_train = x_train[train_mask]
+        y_train = y_train[train_mask]
+        x_test = x_test[test_mask]
+        y_test = y_test[test_mask]
+
+    # Normalisation [0,255] -> [0,1]
+    x_train = x_train.astype(np.float32) / 255.0
+    x_test = x_test.astype(np.float32) / 255.0
+
+    # Aplatir les images en vecteurs
+    x_train = x_train.reshape(x_train.shape[0], -1)
+    x_test = x_test.reshape(x_test.shape[0], -1)
+
+    # Ajouter le vecteur one-hot si j est spécifié
+    if j is not None:
+        if not (0 <= j < num_classes):
+            raise ValueError(f"j doit être entre 0 et {num_classes - 1}, reçu: {j}")
+        
+        # Créer le vecteur one-hot
+        one_hot = np.zeros(num_classes, dtype=np.float32)
+        one_hot[j] = 1.0
+        
+        # Répliquer pour chaque échantillon et concaténer
+        one_hot_train = np.tile(one_hot, (x_train.shape[0], 1))
+        one_hot_test = np.tile(one_hot, (x_test.shape[0], 1))
+        
+        x_train = np.concatenate([x_train, one_hot_train], axis=1)
+        x_test = np.concatenate([x_test, one_hot_test], axis=1)
+
     return x_train, y_train, x_test, y_test
 
-
-def split_dataset_fully_synchronized(x, y, num_groups=3, seed=None):
+# ---------------------------------------------------------------------
+# Split dataset : fully synchronized groups
+# ---------------------------------------------------------------------
+def split_dataset_fully_synchronized(x: np.ndarray, y: np.ndarray, num_groups: int = 3, seed: int = None):
     """
-    Divise le dataset en groupes synchronisés par position, avec classes mélangées.
-    
+    Divise le dataset en groupes synchronisés par position.
     Garantit qu'à chaque index i, tous les groupes ont le même label mais des images différentes.
-
-    Args:
-        x (ndarray): Données (ex: images)
-        y (ndarray): Labels
-        num_groups (int): Nombre de groupes
-        seed (int, optional): Pour reproductibilité
-
-    Returns:
-        groups_x (list of ndarray): Données par groupe (images différentes)
-        groups_y (list of ndarray): Labels par groupe (labels identiques à chaque ligne)
     """
     if seed is not None:
         np.random.seed(seed)
@@ -107,552 +337,484 @@ def split_dataset_fully_synchronized(x, y, num_groups=3, seed=None):
         label_indices = np.where(y == label)[0]
         np.random.shuffle(label_indices)
 
-        # Tronquer pour divisibilité parfaite
         n = len(label_indices)
         n_div = (n // num_groups) * num_groups
         label_indices = label_indices[:n_div]
 
-        # Répartition synchronisée
         splits = np.array_split(label_indices, num_groups)
         for g in range(num_groups):
             groups_indices[g].extend(splits[g])
 
-    # Convertir en tableaux numpy
     groups_x = [x[inds] for inds in groups_indices]
     groups_y = [y[inds] for inds in groups_indices]
 
-    # Mélange synchronisé (optionnel mais recommandé)
-    # Permet d'avoir les classes mélangées au sein de chaque groupe
-    if seed is not None:
-        np.random.seed(seed + 1)  # Seed différent pour ce mélange
-    
+    # Mélange synchronisé (permute les positions, conserve la synchronisation des labels)
     perm = np.random.permutation(len(groups_y[0]))
     groups_x = [gx[perm] for gx in groups_x]
     groups_y = [gy[perm] for gy in groups_y]
 
-    # Vérification stricte de la synchronisation des labels
+    # Vérification stricte
     reference = groups_y[0]
     for i in range(1, num_groups):
         if not np.array_equal(reference, groups_y[i]):
-            raise ValueError(f"Les labels ne sont pas synchronisés entre les groupes {0} et {i}")
+            raise ValueError(f"Les labels ne sont pas synchronisés entre les groupes 0 et {i}")
 
     return groups_x, groups_y
 
-def dataset_statistics(groups_x, groups_y, show_comparison=True, verbose=True):
+
+# ---------------------------------------------------------------------
+# Statistiques dataset
+# ---------------------------------------------------------------------
+def dataset_statistics(groups_x, groups_y, show_comparison: bool = True, verbose: bool = True):
     """
     Affiche des statistiques détaillées sur un ou plusieurs groupes de données.
-
-    Args:
-        groups_x (list of ndarray): Liste des données par groupe
-        groups_y (list of ndarray): Liste des labels par groupe
-        show_comparison (bool): Si True, compare la synchronisation entre groupes
-        verbose (bool): Si True, affiche les détails des distributions
     """
     num_groups = len(groups_x)
-    
-    print(f"{'='*60}")
+
+    print(f"{'=' * 60}")
     print(f"STATISTIQUES GLOBALES - {num_groups} groupe(s)")
-    print(f"{'='*60}")
-    
+    print(f"{'=' * 60}")
+
     for g in range(num_groups):
         x = groups_x[g]
         y = groups_y[g]
         num_samples = len(x)
-        
-        print(f"\n{'-'*60}")
-        print(f"GROUPE {g+1}/{num_groups}")
-        print(f"{'-'*60}")
-        
-        # Informations sur les données
+
+        print(f"\n{'-' * 60}")
+        print(f"GROUPE {g + 1}/{num_groups}")
+        print(f"{'-' * 60}")
+
         print(f"Nombre d'exemples    : {num_samples}")
         print(f"Dimension des images : {x.shape[1:]}")
         print(f"Plage de valeurs     : [{x.min():.3f}, {x.max():.3f}]")
         print(f"Type de données      : {x.dtype}")
-        
-        # Distribution des classes
+
         unique_labels, counts = np.unique(y, return_counts=True)
         print(f"\nNombre de classes    : {len(unique_labels)}")
-        
+
         if verbose:
             print(f"\nDistribution des classes :")
             for label, count in zip(unique_labels, counts):
-                bar = '#' * int(count / num_samples * 50)  # Barre visuelle
-                print(f"  Classe {label:2d} : {count:5d} ({count/num_samples*100:5.2f}%) {bar}")
-        
-        # Stats équilibre
+                bar = '#' * int(count / num_samples * 50) if num_samples > 0 else ''
+                print(f"  Classe {label:2d} : {count:5d} ({count / num_samples * 100:5.2f}%) {bar}")
+
         balance_ratio = counts.min() / counts.max() if len(counts) > 0 else 1.0
         balance_status = "Equilibre" if balance_ratio > 0.8 else "Desequilibre"
         print(f"\nEquilibre            : {balance_status} (ratio: {balance_ratio:.2f})")
-    
-    # Comparaison entre groupes
+
     if num_groups > 1 and show_comparison:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("COMPARAISON DES GROUPES")
-        print(f"{'='*60}")
-        
-        # Vérifier la synchronisation des labels
+        print(f"{'=' * 60}")
+
         all_synced = True
         reference = groups_y[0]
-        
         for g in range(1, num_groups):
             is_synced = np.array_equal(reference, groups_y[g])
             status = "Synchronises" if is_synced else "NON synchronises"
-            print(f"Groupe 1 <-> Groupe {g+1} : {status}")
+            print(f"Groupe 1 <-> Groupe {g + 1} : {status}")
             all_synced = all_synced and is_synced
-        
+
         if all_synced:
             print(f"\nTous les groupes sont parfaitement synchronises !")
         else:
             print(f"\nAttention : desynchronisation detectee !")
-        
-        # Vérifier les dimensions
+
         ref_shape = groups_x[0].shape
         same_shape = all(gx.shape == ref_shape for gx in groups_x)
         print(f"\nDimensions identiques  : {'Oui' if same_shape else 'Non'}")
-        
-        # Vérifier le nombre d'exemples
+
         ref_size = len(groups_x[0])
         same_size = all(len(gx) == ref_size for gx in groups_x)
         print(f"Taille identique       : {'Oui' if same_size else 'Non'}")
-    
-    print(f"\n{'='*60}\n")
+
+    print(f"\n{'=' * 60}\n")
 
 
-# DataLoader
-def make_tf_datasets_from_groups(groups_x: List[np.ndarray], 
-                                groups_y: List[np.ndarray], 
-                                batch_size: int = 100, 
+# ---------------------------------------------------------------------
+# DataLoader -> tf.data.Dataset
+# ---------------------------------------------------------------------
+def make_tf_datasets_from_groups(groups_x: List[np.ndarray],
+                                groups_y: List[np.ndarray],
+                                batch_size: int = 100,
                                 shuffle: bool = False,
-                                drop_remainder: bool = False
-                            ) -> List[tf.data.Dataset]:
-    """..."""
+                                drop_remainder: bool = False) -> List[tf.data.Dataset]:
+    """
+    Construit une liste de tf.data.Dataset (un par groupe).
+    """
     if len(groups_x) != len(groups_y):
-        raise ValueError(
-            f"Nombre de groupes incompatible: {len(groups_x)} vs {len(groups_y)}"
-        )
-    
+        raise ValueError(f"Nombre de groupes incompatible: {len(groups_x)} vs {len(groups_y)}")
+
     datasets = []
     for idx, (x_group, y_group) in enumerate(zip(groups_x, groups_y)):
         if len(x_group) != len(y_group):
-            raise ValueError(
-                f"Groupe {idx}: taille incompatible"
-            )
-        
-        # ✓ FORCER int32 ici
+            raise ValueError(f"Groupe {idx}: taille incompatible")
+
         y_group_int32 = y_group.astype(np.int32)
-        
+
         ds = tf.data.Dataset.from_tensor_slices((x_group, y_group_int32))
-        
         if shuffle:
             ds = ds.shuffle(buffer_size=len(x_group), reshuffle_each_iteration=True)
-        
+
         ds = ds.batch(batch_size, drop_remainder=drop_remainder)
         ds = ds.prefetch(tf.data.AUTOTUNE)
-        
+
         datasets.append(ds)
-    
+
     return datasets
 
+
 def verify_batch_synchronization(datasets):
-    """Vérifie que les batches restent synchronisés entre groupes."""
+    """
+    Vérifie que les batches restent synchronisés entre groupes.
+    """
     iterators = [iter(ds) for ds in datasets]
-    
     batch_idx = 0
     try:
         while True:
             batches = [next(it) for it in iterators]
             labels = [batch[1].numpy() for batch in batches]
-            
-            # Vérifier que tous les groupes ont les mêmes labels
+
             reference = labels[0]
             for i, label_batch in enumerate(labels[1:], 1):
                 if not np.array_equal(reference, label_batch):
                     print(f"Batch {batch_idx}: Groupe 0 et {i} non synchronisés")
                     return False
-            
+
             batch_idx += 1
     except StopIteration:
         return True
 
-# Détection GPU
-ON_GPU = len(tf.config.list_physical_devices('GPU')) > 0
+
+# ---------------------------------------------------------------------
+# Model factory
+# ---------------------------------------------------------------------
+def create_agent(hidden_size: int = 50, num_classes: int = 10, input_shape: tuple = None):
+    """
+    Crée un modèle Keras séquentiel qui renvoie des probabilités (Softmax).
+    """
+    layers = []
+
+    if input_shape is not None:
+        layers.append(tf.keras.layers.Input(shape=input_shape))
+
+        num_channels = input_shape[-1] if len(input_shape) == 3 else 1
+        num_filters = 16 if num_channels == 1 else 32
+
+        layers.extend([
+            tf.keras.layers.Conv2D(
+                filters=num_filters,
+                kernel_size=(3, 3),
+                strides=(1, 1),
+                padding='same',
+                activation='relu',
+                kernel_initializer=tf.keras.initializers.HeNormal(),
+                bias_initializer='zeros',
+                name='conv1'
+            ),
+            tf.keras.layers.MaxPooling2D(
+                pool_size=(2, 2),
+                strides=(2, 2),
+                padding='valid',
+                name='maxpool1'
+            )
+        ])
+
+    layers.extend([
+        tf.keras.layers.Dense(
+            hidden_size,
+            activation='relu',
+            use_bias=False,
+            kernel_initializer=tf.keras.initializers.HeNormal(),
+            bias_initializer='zeros',
+            name='hidden'
+        ),
+        tf.keras.layers.Dense(
+            num_classes,
+            use_bias=True,
+            kernel_initializer=tf.keras.initializers.GlorotUniform(),
+            bias_initializer='zeros',
+            name='logits'
+        ),
+        tf.keras.layers.Softmax(name='probabilities')
+    ])
+
+    model = tf.keras.Sequential(layers, name='agent')
+    return model
 
 
+# ---------------------------------------------------------------------
+# MultiAgentAI class (conservée, mise en forme)
+# ---------------------------------------------------------------------
 class MultiAgentAI:
-    """Système multi-agents pour l'apprentissage collaboratif."""
-    # ==================== INITIALISATION ====================
-    
-    def __init__(self, k=3, hidden_size=150, lr=1e-3, input_shape=None, num_classes=10, 
+    def __init__(self, k=3, hidden_size=150, lr=1e-3, input_shape=None, num_classes=10,
                  optimizer_type='adamw', optimizer_kwargs=None, batch_size=100):
+        """
+        Multi-agent wrapper: k sous-réseaux indépendants + optimisateurs.
+        """
         self.k = k
         self.batch_size = batch_size
-        self.input_shape = input_shape or (28, 28)
+        self.input_shape = input_shape
         self.num_classes = num_classes
-        self.hidden_size = hidden_size
-        
-        # Création des composants
-        self.sous_reseaux = self._create_all_agents()
-        self.optims = self._create_optimizers(optimizer_type, lr, optimizer_kwargs)
-        self.loss_fn, self.kl_fn = self._create_losses()
-        self.training_history = self._init_history()
-        
-        print(f"✓ {'GPU' if ON_GPU else 'CPU'} - {k} agents - Optimiseur: {optimizer_type.upper()}")
 
-    def _create_agent(self):
-        """Crée un seul agent."""
-        inputs = tf.keras.layers.Input(shape=self.input_shape)
-        
-        if len(self.input_shape) == 3:
-            num_filters = 16 if self.input_shape[-1] == 1 else 32
-            x = tf.keras.layers.Conv2D(num_filters, (3, 3), padding='same', activation='relu',
-                                        kernel_initializer=tf.keras.initializers.HeNormal())(inputs)
-            x = tf.keras.layers.MaxPooling2D((2, 2))(x)
-            x = tf.keras.layers.Flatten()(x)
-        else:
-            x = tf.keras.layers.Flatten()(inputs)
-        
-        x = tf.keras.layers.Dense(80, activation='relu', 
-                                   kernel_initializer=tf.keras.initializers.HeNormal())(x)
-        x = tf.keras.layers.Dense(self.hidden_size, activation='relu',
-                                   kernel_initializer=tf.keras.initializers.HeNormal())(x)
-        x = tf.keras.layers.Dense(self.num_classes, 
-                                   kernel_initializer=tf.keras.initializers.GlorotUniform())(x)
-        outputs = tf.keras.layers.Softmax()(x)
-        
-        return tf.keras.Model(inputs=inputs, outputs=outputs, name='agent')
+        # Création des sous-réseaux
+        self.sous_reseaux = [create_agent(hidden_size, num_classes, input_shape) for _ in range(k)]
 
-    def _create_all_agents(self):
-        """Crée et initialise tous les agents."""
-        agents = [self._create_agent() for _ in range(self.k)]
-        
-        # Build explicite
-        dummy = tf.zeros([1] + list(self.input_shape))
-        for i, agent in enumerate(agents):
-            _ = agent(dummy)
-            print(f"  Agent {i}: {len(agent.trainable_variables)} variables")
-        
-        return agents
-
-    def _create_optimizers(self, optimizer_type, lr, optimizer_kwargs):
-        """Crée les optimiseurs pour chaque agent."""
-        defaults = {
+        # Paramètres par défaut des optimiseurs
+        default_kwargs = {
             'adamw': {'beta_1': 0.9, 'beta_2': 0.96, 'epsilon': 1e-9, 'weight_decay': 1e-5, 'amsgrad': True},
             'adam': {'beta_1': 0.9, 'beta_2': 0.999, 'epsilon': 1e-7},
             'sgd': {'momentum': 0.987, 'nesterov': True},
             'rmsprop': {'rho': 0.9, 'momentum': 0.0, 'epsilon': 1e-7},
             'adagrad': {'initial_accumulator_value': 0.1, 'epsilon': 1e-7}
         }
-        
-        opt_type = optimizer_type.lower()
-        kwargs = {**defaults.get(opt_type, {}), **(optimizer_kwargs or {})}
-        
-        optimizer_classes = {
-            'adamw': tf.keras.optimizers.AdamW,
-            'adam': tf.keras.optimizers.Adam,
-            'sgd': tf.keras.optimizers.SGD,
-            'rmsprop': tf.keras.optimizers.RMSprop,
-            'adagrad': tf.keras.optimizers.Adagrad
-        }
-        
-        if opt_type not in optimizer_classes:
+
+        opt_kwargs = default_kwargs.get(optimizer_type.lower(), {})
+        if optimizer_kwargs:
+            opt_kwargs.update(optimizer_kwargs)
+
+        optimizer_type = optimizer_type.lower()
+        if optimizer_type == 'adamw':
+            base_optim = lambda: tf.keras.optimizers.AdamW(learning_rate=lr, **opt_kwargs)
+        elif optimizer_type == 'adam':
+            base_optim = lambda: tf.keras.optimizers.Adam(learning_rate=lr, **opt_kwargs)
+        elif optimizer_type == 'sgd':
+            base_optim = lambda: tf.keras.optimizers.SGD(learning_rate=lr, **opt_kwargs)
+        elif optimizer_type == 'rmsprop':
+            base_optim = lambda: tf.keras.optimizers.RMSprop(learning_rate=lr, **opt_kwargs)
+        elif optimizer_type == 'adagrad':
+            base_optim = lambda: tf.keras.optimizers.Adagrad(learning_rate=lr, **opt_kwargs)
+        else:
             raise ValueError(f"Optimisateur '{optimizer_type}' non reconnu.")
-        
-        return [optimizer_classes[opt_type](learning_rate=lr, **kwargs) for _ in range(self.k)]
 
-    def _create_losses(self):
-        """Crée les fonctions de loss."""
-        loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(
-            from_logits=False, 
-            reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
-        )
-        kl_fn = tf.keras.losses.KLDivergence(
-            reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
-        )
-        return loss_fn, kl_fn
+        # Création des optimiseurs
+        self.optims = [base_optim() for _ in range(k)]
+        if on_gpu:
+            print(f"✓ GPU détecté - Optimisateur: {optimizer_type.upper()}")
+        else:
+            print(f"✓ CPU détecté - Optimisateur: {optimizer_type.upper()}")
 
-    def _init_history(self):
-        """Initialise l'historique d'entraînement."""
-        return {
-            "losses": [[] for _ in range(self.k)],
-            "accuracies": [[] for _ in range(self.k)],
+        # Fonctions de perte
+        self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False,
+                                                                     reduction="sum_over_batch_size")
+        self.kl_fn = tf.keras.losses.KLDivergence(reduction="sum_over_batch_size")
+
+        # Historique
+        self.training_history = {
+            "losses": [[] for _ in range(k)],
+            "accuracies": [[] for _ in range(k)],
             "ensemble_accuracy": []
         }
 
-    # ==================== FORWARD / CALL ====================
+        # Option de tracking de lg (utilisé précédemment dans ton code)
+        self.track_lg = False
 
-    def __call__(self, x_batch_list, training=False):
-        """Forward pass pour tous les agents."""
-        return [self.sous_reseaux[i](x_batch_list[i], training=training) for i in range(self.k)]
-
-    def call_no_grad(self, x_batch_list):
-        """Forward pass sans gradient pour tous les agents."""
-        return [tf.stop_gradient(self.sous_reseaux[i](x_batch_list[i], training=False)) for i in range(self.k)]
-
-    def predict(self, x_batch_list):
-        """Prédit les classes pour chaque agent."""
-        outputs = self(x_batch_list, training=False)
-        return [tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs]
-
-    # ==================== CONSENSUS ====================
-
-    def _hard_majority(self, outputs):
-        """Vote majoritaire hard : one-hot sur la classe la plus votée."""
-        # Prédictions de chaque agent [K, batch]
-        preds = tf.stack([tf.argmax(o, axis=-1) for o in outputs], axis=0)
-        
-        # Comptage des votes [batch, num_classes]
-        votes = tf.reduce_sum(tf.one_hot(preds, depth=self.num_classes), axis=0)
-        
-        # Classe majoritaire -> one-hot
-        majority_class = tf.argmax(votes, axis=-1)
-        return tf.one_hot(majority_class, depth=self.num_classes)
-
-    def _soft_majority(self, outputs, temperature):
-        """Vote majoritaire soft avec Gumbel-Softmax."""
-        avg_probs = tf.reduce_mean(tf.stack(outputs, axis=0), axis=0)
-        return self._gumbel_softmax(avg_probs, temperature=temperature, hard=True)
-
-    def _random_vote(self, outputs, batch_size, temperature):
-        """Sélection aléatoire d'un agent."""
-        probs = tf.stack(outputs, axis=0)
-        rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
-        indices = tf.stack([rand_idx, tf.range(batch_size)], axis=1)
-        selected_probs = tf.gather_nd(probs, indices)
-        return self._gumbel_softmax(selected_probs, temperature=temperature, hard=True)
-
-    @staticmethod
-    def _gumbel_softmax(probs, temperature=0.1, hard=True):
-        """Gumbel-Softmax : approximation différentiable de argmax."""
-        logits = tf.math.log(probs + 1e-8)
-        uniform = tf.random.uniform(tf.shape(logits), minval=1e-8, maxval=1.0)
-        gumbel_noise = -tf.math.log(-tf.math.log(uniform))
-        y_soft = tf.nn.softmax((logits + gumbel_noise) / temperature)
-        
-        if hard:
-            y_hard = tf.one_hot(tf.argmax(y_soft, axis=-1), depth=tf.shape(logits)[-1])
-            y_hard = tf.cast(y_hard, y_soft.dtype)
-            return y_hard - tf.stop_gradient(y_soft) + y_soft
-        
-        return y_soft
-
-    def compute_consensus(self, outputs, batch_size, strategy="majority_hard", temperature=0.1):
+    # -----------------------------------------------------------------
+    @tf.function
+    def cross_information(self, outputs, targets, strategy="majority", alpha=1.0, beta=0.0):
         """
-        Calcule la cible de consensus selon la stratégie.
-        
-        Strategies:
-            - "majority_hard": Vote majoritaire dur (défaut)
-            - "majority_soft": Moyenne des probas + Gumbel-Softmax
-            - "vote": Sélection aléatoire d'un agent
+        Calcule les pertes locales + termes de consensus/divergence.
+        Retourne un vecteur de pertes (taille k).
         """
-        if strategy == "majority_hard":
-            consensus = self._hard_majority(outputs)
-        elif strategy == "majority_soft":
-            consensus = self._soft_majority(outputs, temperature)
-        elif strategy == "vote":
-            consensus = self._random_vote(outputs, batch_size, temperature)
-        else:
-            raise ValueError(f"Unknown strategy '{strategy}'. Use 'majority_hard', 'majority_soft' or 'vote'.")
-        
-        return tf.stop_gradient(consensus)
-
-    # ==================== LOSSES ====================
-
-    def soft_cross_entropy(self, soft_targets, probs):
-        """Cross-entropy avec cibles soft."""
-        log_probs = tf.math.log(probs + 1e-8)
-        return -tf.reduce_mean(tf.reduce_sum(soft_targets * log_probs, axis=-1))
-
-    def compute_divergence(self, output_i, other_outputs):
-        """Divergence KL entre un agent et les autres."""
-        kl_sum = sum(self.kl_fn(output_i, other) for other in other_outputs)
-        return kl_sum / float(len(other_outputs))
-
-    def compute_agent_loss(self, output_i, targets, consensus_target, other_outputs, alpha, beta):
-        """Calcule la loss totale pour un agent."""
-        L_sup = self.loss_fn(targets, output_i)
-        L_cons = self.soft_cross_entropy(consensus_target, output_i) if alpha > 0 and self.k > 1 else 0.0
-        L_div = self.compute_divergence(output_i, other_outputs) if beta > 0 and self.k > 1 else 0.0
-        
-        return L_sup * (L_sup + alpha * L_cons + beta * L_div)
-
-    # ==================== TRAINING ====================
-
-    def _train_single_agent(self, i, x_input, targets, consensus_target, other_outputs, alpha, beta):
-        """Entraîne un seul agent."""
-        with tf.GradientTape() as tape:
-            output_i = self.sous_reseaux[i](x_input, training=True)
-            loss = self.compute_agent_loss(output_i, targets, consensus_target, other_outputs, alpha, beta)
-        
-        grads = tape.gradient(loss, self.sous_reseaux[i].trainable_variables)
-        
-        if grads and not all(g is None for g in grads):
-            self.optims[i].apply_gradients(zip(grads, self.sous_reseaux[i].trainable_variables))
-        
-        return loss, output_i
-
-    def train_step_batch(self, x_batch_list, y_batch_list, strategy="majority_hard", alpha=0.5, beta=0.1, temperature=0.1):
-        """Un pas d'entraînement pour tous les agents."""
-        targets = tf.cast(y_batch_list[0], tf.int32)
-        batch_size = tf.shape(x_batch_list[0])[0]
-        
-        # Forward sans gradient pour consensus
-        all_outputs_no_grad = self.call_no_grad(x_batch_list)
-        consensus_target = self.compute_consensus(all_outputs_no_grad, batch_size, strategy, temperature)
-        
-        # Entraîner chaque agent
-        all_losses, all_outputs = [], []
-        for i in range(self.k):
-            other_outputs = [all_outputs_no_grad[j] for j in range(self.k) if j != i]
-            loss, output = self._train_single_agent(
-                i, x_batch_list[i], targets, consensus_target, other_outputs, alpha, beta
-            )
-            all_losses.append(loss)
-            all_outputs.append(output)
-        
-        return all_losses, all_outputs
-
-    # ==================== METRICS ====================
-
-    def compute_accuracy(self, outputs, targets):
-        """Calcule l'accuracy pour chaque agent."""
         targets = tf.cast(targets, tf.int32)
-        return [
-            float(tf.reduce_mean(tf.cast(tf.equal(tf.argmax(o, axis=-1, output_type=tf.int32), targets), tf.float32)))
-            for o in outputs
-        ]
+        batch_size = tf.shape(outputs[0])[0]
+        self.batch_size = batch_size
 
-    def _update_history(self, epoch_losses, epoch_accs, test_acc=None):
-        """Met à jour l'historique d'entraînement."""
+        if self.k == 1:
+            return tf.stack([self.loss_fn(targets, outputs[0])])
+
+        # 1) prédictions catégoriques par agent (indices)
+        preds = tf.stack([tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs], axis=0)
+
+        # 2) calcul maj_targets selon strategy
+        if strategy == "majority":
+            onehot = tf.one_hot(preds, depth=self.num_classes)
+            votes = tf.reduce_sum(onehot, axis=0)
+            maj_targets = tf.argmax(votes, axis=-1, output_type=tf.int32)
+        elif strategy == "vote":
+            rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
+            preds_t = tf.transpose(preds, [1, 0])
+            maj_targets = tf.gather_nd(preds_t, tf.stack([tf.range(batch_size), rand_idx], axis=1))
+        else:
+            raise ValueError(f"Unknown strategy '{strategy}'")
+
+        # 3) losses locales L_i
+        L_i = tf.stack([self.loss_fn(targets, o) for o in outputs])
+
+        # 4) consensus L_loc : cross-entropy avec maj_targets
+        L_loc = tf.stack([self.loss_fn(maj_targets, o) for o in outputs])
+
+        # 5) divergence (KL moyen entre distributions)
+        loss_div_list = []
         for i in range(self.k):
-            self.training_history["losses"][i].append(np.mean(epoch_losses[i]))
-            self.training_history["accuracies"][i].append(np.mean(epoch_accs[i]))
-        
-        if test_acc is not None:
-            self.training_history["ensemble_accuracy"].append(test_acc)
+            div_i = tf.reduce_mean([self.kl_fn(outputs[i], outputs[j]) for j in range(self.k) if j != i])
+            div_i = tf.math.multiply_no_nan(div_i, 1.0)
+            loss_div_list.append(div_i)
+        loss_div = tf.stack(loss_div_list)
 
-    def _print_epoch(self, epoch, epochs, mean_losses, mean_accs, test_acc, strategy):
-        """Affiche les résultats d'une epoch."""
-        print(f"\nEpoch {epoch+1}/{epochs}")
+        # 6) composition finale
+        losses = L_i * (L_i + alpha * L_loc + beta * loss_div)
+        return losses
+
+    # -----------------------------------------------------------------
+    @tf.function
+    def train_step_batch(self, x_batch_list, y_batch_list, strategy="majority", alpha=0.5, beta=0.1):
+        """
+        Effectue une étape d'entraînement sur un batch synchronisé (un batch par agent).
+        """
+        targets = tf.cast(y_batch_list[0], tf.int32)
+        gradients_list = []
+
+        # Calcul des gradients pour chaque agent
         for i in range(self.k):
-            print(f"  Agent {i+1} - Loss: {mean_losses[i]:.4f}, Acc: {mean_accs[i]:.4f}")
-        if test_acc is not None:
-            print(f"  Ensemble Test Accuracy ({strategy}): {test_acc:.4f}")
+            with tf.GradientTape() as tape:
+                outputs = [self.sous_reseaux[j](x_batch_list[j], training=True) for j in range(self.k)]
+                losses = self.cross_information(outputs, targets, strategy=strategy, alpha=alpha, beta=beta)
 
-    # ==================== MAIN TRAINING LOOP ====================
+                loss_i = losses[i]
+                grads = tape.gradient(loss_i, self.sous_reseaux[i].trainable_variables)
 
-    def train_step(self, train_datasets, epochs=10, test_datasets=None, strategy="majority_hard", 
-                   verbose=True, alpha=0.5, beta=0.1, temperature=0.1):
-        """Boucle d'entraînement principale."""
+            gradients_list.append(grads)
+
+        # Application des gradients
+        for i in range(self.k):
+            self.optims[i].apply_gradients(zip(gradients_list[i], self.sous_reseaux[i].trainable_variables))
+
+        # Forward final en mode inference pour monitoring
+        final_outputs = [self.sous_reseaux[i](x_batch_list[i], training=False) for i in range(self.k)]
+
+        per_model_losses = self.cross_information(final_outputs, targets, strategy=strategy, alpha=alpha, beta=beta)
+        return per_model_losses, final_outputs
+
+    # -----------------------------------------------------------------
+    def _compute_warmup_alpha(self, epoch, alpha, alpha_warmup):
+        """Calcule alpha avec warm-up progressif."""
+        if alpha_warmup <= 0:
+            return alpha
+        return alpha * min(1.0, (epoch + 1) / alpha_warmup)
+
+    # -----------------------------------------------------------------
+    def train_step(self, train_datasets, epochs=10, test_datasets=None, strategy="majority",
+                   verbose=True, alpha=0.5, beta=0.1, alpha_warmup=0):
+        """
+        Boucle d'entraînement principale.
+        """
         for epoch in range(epochs):
+            current_alpha = self._compute_warmup_alpha(epoch, alpha, alpha_warmup)
+
             epoch_losses = [[] for _ in range(self.k)]
             epoch_accs = [[] for _ in range(self.k)]
-            
+
             for batches in zip(*train_datasets):
                 x_batch_list = [b[0] for b in batches]
                 y_batch_list = [b[1] for b in batches]
-                
-                losses, outputs = self.train_step_batch(
-                    x_batch_list, y_batch_list, strategy, alpha, beta, temperature
-                )
-                
-                accs = self.compute_accuracy(outputs, y_batch_list[0])
+
+                losses, outputs = self.train_step_batch(x_batch_list, y_batch_list,
+                                                       strategy=strategy, alpha=current_alpha, beta=beta)
+
+                targets = tf.cast(y_batch_list[0], tf.int32)
                 for i in range(self.k):
+                    preds = tf.argmax(outputs[i], axis=-1, output_type=tf.int32)
+                    acc = tf.reduce_mean(tf.cast(tf.equal(targets, preds), tf.float32))
                     epoch_losses[i].append(float(losses[i]))
-                    epoch_accs[i].append(accs[i])
-            
+                    epoch_accs[i].append(float(acc))
+
             mean_losses = [np.mean(epoch_losses[i]) for i in range(self.k)]
             mean_accs = [np.mean(epoch_accs[i]) for i in range(self.k)]
-            
-            test_acc = self.evaluate_ensemble(test_datasets, strategy, verbose=False) if test_datasets else None
-            self._update_history(epoch_losses, epoch_accs, test_acc)
-            
+            for i in range(self.k):
+                self.training_history["losses"][i].append(mean_losses[i])
+                self.training_history["accuracies"][i].append(mean_accs[i])
+
+            test_acc = None
+            if test_datasets is not None:
+                test_acc = self.evaluate_ensemble(test_datasets, strategy=strategy, verbose=False)
+                self.training_history["ensemble_accuracy"].append(test_acc)
+
             if verbose:
-                self._print_epoch(epoch, epochs, mean_losses, mean_accs, test_acc, strategy)
-        
+                print(f"\nEpoch {epoch + 1}/{epochs} (alpha={current_alpha:.3f})")
+                for i in range(self.k):
+                    print(f"  Agent {i + 1} - Loss: {mean_losses[i]:.4f}, Acc: {mean_accs[i]:.4f}")
+                if test_acc is not None:
+                    print(f"  Ensemble Test Accuracy: {test_acc:.4f}")
+
         return self.training_history
 
-    # ==================== EVALUATION ====================
-
-    def _ensemble_predict_majority(self, preds):
-        """Vote majoritaire."""
-        votes = tf.one_hot(tf.stack(preds), depth=self.num_classes)
-        return tf.argmax(tf.reduce_sum(votes, axis=0), axis=-1, output_type=tf.int32)
-
-    def _ensemble_predict_vote(self, preds, batch_size):
-        """Sélection aléatoire."""
-        rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
-        preds_stack = tf.stack(preds, axis=1)
-        return tf.gather_nd(preds_stack, tf.stack([tf.range(batch_size), rand_idx], axis=1))
-
-    def ensemble_predict(self, preds, strategy, batch_size):
-        """Prédiction d'ensemble selon la stratégie."""
-        if strategy in ["majority_hard", "majority_soft"]:
-            return self._ensemble_predict_majority(preds)
-        elif strategy == "vote":
-            return self._ensemble_predict_vote(preds, batch_size)
-        else:
-            raise ValueError(f"Unknown strategy '{strategy}'.")
-
-    def evaluate_ensemble(self, test_datasets, strategy="majority_hard", verbose=True):
-        """Évaluation de l'ensemble."""
-        all_preds_ensemble, all_trues = [], []
+    # -----------------------------------------------------------------
+    def evaluate_ensemble(self, test_datasets, strategy="majority", verbose=True):
+        """
+        Évalue le vote d'ensemble sur les jeux de test.
+        """
+        all_preds_ensemble = []
+        all_trues = []
         all_preds_agents = [[] for _ in range(self.k)]
-        
+
         for batches in zip(*test_datasets):
             x_batches = [b[0] for b in batches]
             y_batch = tf.cast(batches[0][1], tf.int32)
-            batch_size = tf.shape(y_batch)[0]
-            
-            preds = self.predict(x_batches)
-            ensemble_pred = self.ensemble_predict(preds, strategy, batch_size)
-            
+
+            outputs = [self.sous_reseaux[i](x_batches[i], training=False) for i in range(self.k)]
+            preds = [tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs]
+
             for i in range(self.k):
                 all_preds_agents[i].append(preds[i])
-            
+
+            if strategy == "majority":
+                votes = tf.one_hot(tf.stack(preds), depth=self.num_classes)
+                votes_sum = tf.reduce_sum(votes, axis=0)
+                ensemble_pred = tf.argmax(votes_sum, axis=-1, output_type=tf.int32)
+            elif strategy == "vote":
+                batch_size = tf.shape(preds[0])[0]
+                rand_idx = tf.random.uniform([batch_size], 0, self.k, tf.int32)
+                preds_stack = tf.stack(preds, axis=1)
+                ensemble_pred = tf.gather_nd(preds_stack, tf.stack([tf.range(batch_size), rand_idx], axis=1))
+            else:
+                raise ValueError(f"Unknown strategy '{strategy}'")
+
             all_preds_ensemble.append(ensemble_pred)
             all_trues.append(y_batch)
-        
-        # Calcul accuracy
+
         all_trues = tf.concat(all_trues, axis=0)
         all_preds_ensemble = tf.concat(all_preds_ensemble, axis=0)
-        acc_ensemble = float(tf.reduce_mean(tf.cast(tf.equal(all_preds_ensemble, all_trues), tf.float32)))
-        
+        all_preds_agents = [tf.concat(all_preds_agents[i], axis=0) for i in range(self.k)]
+
+        acc_ensemble = tf.reduce_mean(tf.cast(tf.equal(all_preds_ensemble, all_trues), tf.float32))
         if verbose:
-            self._print_evaluation(all_preds_agents, all_trues, acc_ensemble, strategy)
-        
-        return acc_ensemble
+            print("\nEvaluation des agents :")
+            for i in range(self.k):
+                acc_i = tf.reduce_mean(tf.cast(tf.equal(all_preds_agents[i], all_trues), tf.float32))
+                print(f"  Agent {i + 1} - Acc: {float(acc_i):.4f}")
+            print(f"  Ensemble ({strategy}) - Acc: {float(acc_ensemble):.4f}")
 
-    def _print_evaluation(self, all_preds_agents, all_trues, acc_ensemble, strategy):
-        """Affiche les résultats d'évaluation."""
-        print("\nEvaluation des agents :")
-        for i in range(self.k):
-            preds_i = tf.concat(all_preds_agents[i], axis=0)
-            acc_i = float(tf.reduce_mean(tf.cast(tf.equal(preds_i, all_trues), tf.float32)))
-            print(f"  Agent {i+1} - Acc: {acc_i:.4f}")
-        print(f"  Ensemble ({strategy}) - Acc: {acc_ensemble:.4f}")
-
-    # ==================== ENTROPY ====================
-
-    def _compute_single_entropy(self, pred):
-        """Calcule l'entropie d'une seule prédiction."""
-        _, _, counts = tf.unique_with_counts(pred)
-        probs = tf.cast(counts, tf.float32) / tf.cast(tf.reduce_sum(counts), tf.float32)
-        return -tf.reduce_sum(probs * tf.math.log(probs + 1e-8)) / tf.math.log(tf.cast(self.k, tf.float32))
+        return float(acc_ensemble)
 
     def entropy_ensemble(self, test_datasets):
-        """Calcule l'entropie des prédictions de l'ensemble."""
         all_preds = []
-        
+
         for batches in zip(*test_datasets):
             x_batches = [b[0] for b in batches]
-            preds = self.predict(x_batches)
-            all_preds.append(tf.stack(preds, axis=1))
-        
-        all_preds = tf.concat(all_preds, axis=0)
-        return tf.stack([self._compute_single_entropy(all_preds[i]) for i in range(tf.shape(all_preds)[0])])
+            outputs = [self.sous_reseaux[i](x_batches[i], training=False) for i in range(self.k)]
+            preds = [tf.argmax(o, axis=-1, output_type=tf.int32) for o in outputs]
+            preds = tf.stack(preds, axis=1)  # shape (batch, k)
+            all_preds.append(preds)
 
+        all_preds = tf.concat(all_preds, axis=0)  # shape (N, k)
+        N = tf.shape(all_preds)[0]
 
-# ==================== TEST ====================
+        entropies = []
+        for i in range(N):
+            pred_i = all_preds[i]  # shape (k,)
+            values, _, counts = tf.unique_with_counts(pred_i)
+            probs = tf.cast(counts, tf.float32) / tf.cast(tf.reduce_sum(counts), tf.float32)
+            ent = -tf.reduce_sum(probs * tf.math.log(probs)) / tf.math.log(tf.cast(self.k, tf.float32))
+            entropies.append(ent)
 
-if __name__ == "__main__":
-    pass  # Tests unitaires peuvent être ajoutés ici
+        entropies = tf.stack(entropies)  # shape (N,)
+        return entropies
+
+# ---------------------------------------------------------------------
+# Module guard
+# ---------------------------------------------------------------------
+if __name__ == '__main__':
+    # Minimal smoke test when lancé directement (n'exécute rien de lourd)
+    print("Module chargé : utilitaires multi-agent prêts.")
+    print(f"GPU disponible: {on_gpu}")
