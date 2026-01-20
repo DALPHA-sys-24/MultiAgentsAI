@@ -3,7 +3,119 @@ import numpy as np
 from collections import defaultdict,Counter
 from typing import Any, List, Dict,Tuple
 from matplotlib import pyplot as plt
+import seaborn as sns
+import pandas as pd
 
+
+
+def plot_heatmap(df_results, heatmap_type='c_j', fixed_param_values=None, 
+                 metric='accuracy_median', figsize=None, cmap='RdYlGn', 
+                 annot=True, save=False, filename=None):
+    """
+    Trace des heatmaps d'accuracy selon le type choisi.
+    
+    Parameters
+    ----------
+    metric : str
+        Métrique à afficher : 'accuracy_median', 'accuracy_mean', 'accuracy_std', etc.
+    """
+    
+    config = {
+        'c_j': {
+            'index': 'j_augment',
+            'columns': 'c_test_class',
+            'fixed': 'hidden_dim',
+            'index_label': 'j (augmentation)',
+            'columns_label': 'Classe (c)',
+            'fixed_label': 'Hidden Dim'
+        },
+        'c_hidden': {
+            'index': 'hidden_dim',
+            'columns': 'c_test_class',
+            'fixed': 'j_augment',
+            'index_label': 'Hidden Dim',
+            'columns_label': 'Classe (c)',
+            'fixed_label': 'j'
+        },
+        'j_hidden': {
+            'index': 'hidden_dim',
+            'columns': 'j_augment',
+            'fixed': 'c_test_class',
+            'index_label': 'Hidden Dim',
+            'columns_label': 'j (augmentation)',
+            'fixed_label': 'Classe'
+        }
+    }
+    
+    if heatmap_type not in config:
+        raise ValueError(f"heatmap_type doit être parmi {list(config.keys())}")
+    
+    cfg = config[heatmap_type]
+    
+    if fixed_param_values is None:
+        fixed_param_values = sorted(df_results[cfg['fixed']].unique())
+    
+    n_plots = len(fixed_param_values)
+    n_cols = min(4, n_plots)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+    
+    if figsize is None:
+        figsize = (5 * n_cols, 4 * n_rows)
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+    
+    for idx in range(n_plots, len(axes)):
+        axes[idx].set_visible(False)
+    
+    for idx, fixed_val in enumerate(fixed_param_values):
+        ax = axes[idx]
+        
+        df_filtered = df_results[df_results[cfg['fixed']] == fixed_val]
+        
+        df_pivot = df_filtered.pivot_table(
+            index=cfg['index'],
+            columns=cfg['columns'],
+            values=metric,
+            aggfunc='mean'
+        )
+        
+        sns.heatmap(
+            df_pivot,
+            annot=annot,
+            fmt='.2f',
+            cmap=cmap,
+            vmin=0,
+            vmax=1,
+            ax=ax,
+            cbar=True,
+            annot_kws={'size': 8},
+            linewidths=0.5
+        )
+        
+        ax.set_title(f'{cfg["fixed_label"]} = {fixed_val}', fontsize=12, fontweight='bold')
+        ax.set_xlabel(cfg['columns_label'], fontsize=10)
+        ax.set_ylabel(cfg['index_label'] if idx % n_cols == 0 else '', fontsize=10)
+    
+    metric_name = metric.replace('accuracy_', '').capitalize()
+    title_map = {
+        'c_j': f'Accuracy ({metric_name}): Classe (c) vs Augmentation (j)',
+        'c_hidden': f'Accuracy ({metric_name}): Classe (c) vs Hidden Dim',
+        'j_hidden': f'Accuracy ({metric_name}): Augmentation (j) vs Hidden Dim'
+    }
+    fig.suptitle(title_map[heatmap_type], fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.tight_layout()
+    
+    if save:
+        if filename is None:
+            filename = f'heatmap_{heatmap_type}_{metric}.png'
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        print(f"Figure sauvegardée: {filename}")
+    
+    plt.show()
+    
+    return fig, axes
 def count_values(tensor):
     """
     Compte le nombre d'occurrences de chaque valeur dans un tenseur 1D.
