@@ -13,17 +13,24 @@
 # Réglages : configs/collab_vs_big.json (toutes les graines dans ce job).
 #
 # Lancement, depuis le dossier du code (dml_v2) :
-#   mkdir -p Logs
-#   sbatch cluster/soumission_collab_vs_big.sh
+#   sbatch soumission_collab_vs_big.sh
 # Sortie : results/<date>_collab_vs_big/ (results.json réécrit après chaque graine)
 # =============================================================================
 
 CONFIG="configs/collab_vs_big.json"
 
+# -----------------------------------------------------------------------------
+# Environnement : modules du cluster (TensorFlow 2.15 + CUDA, GPU déjà configuré)
+# -----------------------------------------------------------------------------
 module --force purge
 ml releases/2023a
+ml tis/2025
+ml CUDA/12.1.1
 ml Python/3.11.3-GCCcore-12.3.0
-source ~/venvs/dml-gpu/bin/activate
+ml SciPy-bundle/2023.07-gfbf-2023a
+ml TensorFlow/2.15.1-foss-2023a-CUDA-12.1.1
+ml matplotlib/3.7.2
+ml tqdm
 
 cd "$SLURM_SUBMIT_DIR"
 export TF_GPU_ALLOCATOR=cuda_malloc_async

@@ -16,8 +16,9 @@ Exemples :
     python run_alpha_sweep.py --config configs/alpha_sweep.json --dataset fashion_mnist --epochs 50
     python run_alpha_sweep.py --alphas 0 1 10 --seeds 0 --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1
     python run_alpha_sweep.py --resume results/20261019-114342_alpha_sweep   # reprend un sweep interrompu
+    python run_alpha_sweep.py --alphas 10 --seeds 2 --run-dir results/campagne/jobs/a10_s2   # un job du cluster
 
-Chaque lancement crée results/<date>_<nom>/ contenant :
+Chaque lancement crée results/<date>_<nom>/ (ou le dossier donné par --run-dir) contenant :
     config.json     config utilisée + nombre de paramètres des agents
     results.json    métriques par (alpha, graine) et résumé par alpha (médiane, quantiles 5 % / 95 %)
     probs/          probabilités de test des agents (.npy), une par (alpha, graine)
@@ -106,6 +107,9 @@ def parse_args():
     p.add_argument("--resume", metavar="DOSSIER",
                    help="Reprend un sweep interrompu dans ce dossier de résultats, avec sa config ; "
                         "les couples (alpha, graine) déjà faits sont sautés.")
+    p.add_argument("--run-dir", metavar="DOSSIER",
+                   help="Dossier de sortie fixe au lieu de results/<date>_<nom> (jobs du cluster) ; "
+                        "les couples (alpha, graine) déjà présents dedans sont sautés.")
     p.add_argument("--cpu", action="store_true", help="Force le CPU même si un GPU est disponible.")
     p.add_argument("--verbose", type=int, default=2)
     return p.parse_args()
@@ -134,7 +138,7 @@ def load_config(args) -> dict:
     else:
         print("[config] aucun fichier de config, valeurs par défaut du script")
     for key, value in vars(args).items():
-        if key not in ("config", "cpu", "verbose") and value is not None:
+        if key not in ("config", "cpu", "verbose", "run_dir") and value is not None:
             # --optimizer sgd / --lr 0.1 : une seule valeur = commune à tous les agents
             single = key in ("optimizer", "lr") and len(value) == 1
             config[key] = value[0] if single else value
@@ -251,23 +255,24 @@ def main():
     print(f"[taille] {config['num_agents']} x {config['arch']} : {params:,} param. chacun")
     print("[alphas] " + ", ".join(f"{a:g} ({strategy_for(a, config)})" for a in config["alphas"]))
 
-    runs, elapsed = [], 0.0
-    if args.resume:
-        # Reprise : on garde les runs déjà terminés du dossier existant
-        run_dir = args.resume
-        results_path = os.path.join(run_dir, "results.json")
-        if os.path.exists(results_path):
-            with open(results_path) as f:
-                previous = json.load(f)
-            runs, elapsed = previous["runs"], previous.get("train_time_s", 0.0)
-        print(f"[reprise] {len(runs)} run(s) déjà terminé(s)")
-    else:
-        # Dossier de résultats + config enregistrée avant l'entraînement
-        run_dir = os.path.join(config["out_dir"], f"{datetime.now():%Y%m%d-%H%M%S}_{config['name']}")
-        os.makedirs(run_dir, exist_ok=True)
+    # Dossier de sortie : celui d'un sweep à reprendre, un dossier fixe (cluster) ou un nouveau dossier daté
+    run_dir = (args.resume or args.run_dir
+               or os.path.join(config["out_dir"], f"{datetime.now():%Y%m%d-%H%M%S}_{config['name']}"))
+    os.makedirs(run_dir, exist_ok=True)
+    if not args.resume:
+        # Config enregistrée avant l'entraînement
         with open(os.path.join(run_dir, "config.json"), "w") as f:
             json.dump({**config, "device": device, "agent_params": params,
                        "strategy_alpha0": STRATEGY_NO_INTERACTION}, f, indent=2)
+
+    # Runs déjà terminés dans ce dossier (reprise après un arrêt) : on les garde et on les saute
+    runs, elapsed = [], 0.0
+    results_path = os.path.join(run_dir, "results.json")
+    if os.path.exists(results_path):
+        with open(results_path) as f:
+            previous = json.load(f)
+        runs, elapsed = previous["runs"], previous.get("train_time_s", 0.0)
+        print(f"[reprise] {len(runs)} run(s) déjà terminé(s) dans {os.path.abspath(run_dir)}")
     probs_dir = os.path.join(run_dir, "probs")
     os.makedirs(probs_dir, exist_ok=True)
 
@@ -280,7 +285,7 @@ def main():
             runs.append(run_one(data, config, float(alpha), seed, args.verbose, probs_dir))
             _cleanup()  # libère les modèles du run (sinon la RAM grossit jusqu'au « Killed »)
             # Réécrit après chaque run : les résultats partiels sont gardés si le job s'arrête
-            with open(os.path.join(run_dir, "results.json"), "w") as f:
+            with open(results_path, "w") as f:
                 json.dump({"experiment": "alpha_sweep", "summary": summary_by_alpha(runs), "runs": runs,
                            "agent_params": params, "train_time_s": time.time() - start}, f, indent=2)
 

@@ -19,20 +19,20 @@
 # (si tu changes ALPHAS ou SEEDS : --array=0-(N_ALPHAS*N_SEEDS - 1))
 #
 # Lancement, depuis le dossier du code (dml_v2) :
-#   mkdir -p Logs
-#   sbatch --export=ALL,CAMPAIGN=alpha_sweep_cifar10 cluster/soumission_alpha_sweep.sh
+#   sbatch soumission_alpha_sweep.sh
 #
 # Sorties : results/$CAMPAIGN/jobs/a<alpha>_s<graine>/{config.json,results.json,probs/}
 # Puis : python merge_sweep.py results/$CAMPAIGN   (rassemble tout pour le notebook)
 #
-# Relancer un job qui a planté (même CAMPAIGN) : il reprend là où il s'était arrêté.
-#   sbatch --array=7 --export=ALL,CAMPAIGN=alpha_sweep_cifar10 cluster/soumission_alpha_sweep.sh
+# Relancer un job qui a planté : il reprend là où il s'était arrêté.
+#   sbatch --array=7 soumission_alpha_sweep.sh
+# Nouvelle campagne (sans écraser l'ancienne) : changer CAMPAIGN ci-dessous.
 # =============================================================================
 
 CONFIG="configs/alpha_sweep.json"
 ALPHAS=(0 0.5 1 10 50 100)
 SEEDS=(0 1 2)
-CAMPAIGN=${CAMPAIGN:-alpha_sweep_${SLURM_ARRAY_JOB_ID}}
+CAMPAIGN="alpha_sweep"            # dossier results/$CAMPAIGN
 
 N_ALPHAS=${#ALPHAS[@]}
 N_SEEDS=${#SEEDS[@]}
@@ -49,14 +49,17 @@ SEED=${SEEDS[$((SLURM_ARRAY_TASK_ID / N_ALPHAS))]}
 RUN_DIR="results/${CAMPAIGN}/jobs/a${ALPHA}_s${SEED}"
 
 # -----------------------------------------------------------------------------
-# Environnement : Python du cluster + venv avec TensorFlow >= 2.16 (Keras 3).
-# Ne pas charger le module TensorFlow/2.15 : il embarque Keras 2, incompatible.
-# Installation du venv une seule fois : voir INSTALL.md, section 3.
+# Environnement : modules du cluster (TensorFlow 2.15 + CUDA, GPU déjà configuré)
 # -----------------------------------------------------------------------------
 module --force purge
 ml releases/2023a
+ml tis/2025
+ml CUDA/12.1.1
 ml Python/3.11.3-GCCcore-12.3.0
-source ~/venvs/dml-gpu/bin/activate
+ml SciPy-bundle/2023.07-gfbf-2023a
+ml TensorFlow/2.15.1-foss-2023a-CUDA-12.1.1
+ml matplotlib/3.7.2
+ml tqdm
 
 cd "$SLURM_SUBMIT_DIR"
 export TF_GPU_ALLOCATOR=cuda_malloc_async
