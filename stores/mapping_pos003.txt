@@ -1,5 +1,0 @@
-POSITION=3
-ARRAY_ID=0
-PROC_ID=3
-alpha=-2.000000
-beta=-0.800000

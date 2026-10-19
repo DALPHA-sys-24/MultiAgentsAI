@@ -1,0 +1,7 @@
+# GPU NVIDIA — Linux ou WSL2 uniquement (TensorFlow n'utilise pas le GPU sous Windows natif)
+# [and-cuda] installe CUDA et cuDNN via pip : seul le pilote NVIDIA est nécessaire.
+tensorflow[and-cuda]>=2.16,<2.22
+numpy>=1.26
+pandas>=2.0
+matplotlib>=3.7
+tqdm>=4.65

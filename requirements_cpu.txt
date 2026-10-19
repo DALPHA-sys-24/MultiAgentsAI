@@ -1,0 +1,6 @@
+# CPU (Windows, macOS, Linux) — Python 3.10 à 3.13
+tensorflow>=2.16,<2.22
+numpy>=1.26
+pandas>=2.0
+matplotlib>=3.7
+tqdm>=4.65
