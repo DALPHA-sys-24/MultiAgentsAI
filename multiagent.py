@@ -45,12 +45,12 @@ class MultiAgentModel(tf.keras.Model):
     """
     Modele multi-agents pour la classification collaborative.
 
-    Loss types (L_k = CE(y, y^k)) :
-        - "leave_one_out": L_k * (L_k + (1-w_k) * CE(y^cons_{-k}, y^k))
-        - "global_interaction": L_k * (L_k + alpha * L_loc + L_glob)
-        - "vote_random": L_k * (L_k + (1-w_k) * CE(y^{vote}, y^k))
-        - "majority_hard": L_k * (L_k + (1-w_k) * CE(y^{majority}, y^k))
-        - "majority_loo":  L_k * (L_k + (1-w_k) * CE(y^{majority_{-k}}, y^k))
+    Loss types (L_k = CE(y, y^k)), toutes de la forme L_k * (L_k + alpha * I_k) :
+        - "leave_one_out": I_k = (1-w_k) * CE(y^cons_{-k}, y^k)
+        - "global_interaction": I_k = CE(y^cons, y^k) + CE(y, y^cons)
+        - "vote_random": I_k = (1-w_k) * CE(y^{vote}, y^k)
+        - "majority_hard": I_k = (1-w_k) * CE(y^{majority}, y^k)
+        - "majority_loo":  I_k = (1-w_k) * CE(y^{majority_{-k}}, y^k)
     Avec un seul agent, toutes se réduisent à la cross-entropy L_k.
 
     Les cross-entropies sont calculées à partir des log-probabilités (log_softmax des
@@ -174,7 +174,7 @@ class MultiAgentModel(tf.keras.Model):
                 Avec schedule et weight decay : optimizers.build_agent_optimizers.
             loss_type: "leave_one_out", "global_interaction", "vote_random", "majority_hard", "majority_loo"
             strategy: "vote", "majority", "simplicial", "k_fold"
-            alpha: Poids du terme de consensus (pour global_interaction).
+            alpha: Poids du terme d'interaction I_k, pour toutes les losses.
             temperature: Température tau pour le softmax des w_k.
             kwargs: Transmis à Model.compile (ex. jit_compile=True pour XLA).
         """
@@ -317,11 +317,11 @@ class MultiAgentModel(tf.keras.Model):
         return -tf.reduce_sum(targets * log_p, axis=-1)
 
     def _interaction_losses(self, l_k, interaction):
-        """L^k = mean_batch( L_k * (L_k + interaction_k) ), renvoyée comme liste de K scalaires."""
-        return tf.unstack(tf.reduce_mean(l_k * (l_k +  self._alpha * interaction), axis=0))
+        """L^k = mean_batch( L_k * (L_k + alpha * interaction_k) ), renvoyée comme liste de K scalaires."""
+        return tf.unstack(tf.reduce_mean(l_k * (l_k + self._alpha * interaction), axis=0))
 
     def compute_loss_leave_one_out(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + (1 - w_k) * CE(y^cons_{-k},y^k))"""
+        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^cons_{-k},y^k))"""
         log_p = self._log_probs(outputs, log_outputs)
         w_k = self.compute_confidence_weights(outputs, log_outputs)
         loo = self.compute_leave_one_out_consensus(outputs, w_k)
@@ -329,7 +329,7 @@ class MultiAgentModel(tf.keras.Model):
         return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_soft(loo, log_p))
 
     def compute_loss_global_interaction(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k +  CE(y^cons, y^k) + CE(y, y^cons))"""
+        """L^k = L_k * (L_k + alpha * (CE(y^cons, y^k) + CE(y, y^cons)))"""
         log_p = self._log_probs(outputs, log_outputs)
         log_w = self.compute_log_confidence_weights(outputs, log_outputs)
         cons = self.consensus_simplicial(outputs, tf.exp(log_w), return_proba=True)
@@ -342,7 +342,7 @@ class MultiAgentModel(tf.keras.Model):
         return self._interaction_losses(l_k, l_loc + l_glob)
 
     def compute_loss_vote_random(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + (1 - w_k) * CE(y^{vote}, y^k))"""
+        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^{vote}, y^k))"""
         log_p = self._log_probs(outputs, log_outputs)
         w_k = self.compute_confidence_weights(outputs, log_outputs)
         batch_size = tf.shape(outputs)[0]
@@ -354,7 +354,7 @@ class MultiAgentModel(tf.keras.Model):
         return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_labels(vote, log_p))
 
     def compute_loss_majority_hard(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + (1 - w_k) * CE(y^{majority}, y^k))"""
+        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^{majority}, y^k))"""
         log_p = self._log_probs(outputs, log_outputs)
         w_k = self.compute_confidence_weights(outputs, log_outputs)
         majority = self.consensus_majority(outputs)  # label dur (batch,)
@@ -362,7 +362,7 @@ class MultiAgentModel(tf.keras.Model):
         return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_labels(majority, log_p))
 
     def compute_loss_majority_loo(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + (1 - w_k) * CE(y^majority_{-k}, y^k))
+        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^majority_{-k}, y^k))
 
         y^majority_{-k} = vote majoritaire des K-1 agents (agent k exclu).
         """
