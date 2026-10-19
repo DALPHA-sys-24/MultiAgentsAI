@@ -32,7 +32,7 @@ from data import load_dataset
 from device import configure_device
 from multiagent import LOSS_FUNCTIONS, STRATEGIES
 from optimizers import available_optimizers
-from tools import count_trainable_params, match_width, run_multi_experiment, run_single_reference
+from tools import _cleanup, count_trainable_params, match_width, run_multi_experiment, run_single_reference
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "collab_vs_big.json")
 
@@ -62,7 +62,7 @@ DEFAULTS = {
     "train_subset": None,
     "seeds": [0, 1, 2],
     "precision": "float32",
-    "jit": False,
+    "jit": "auto",                 # XLA : "auto" = activé sur GPU si possible, désactivé sur CPU
     "out_dir": "results",
 }
 
@@ -70,6 +70,16 @@ DEFAULTS = {
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
+
+def parse_jit(value):
+    """Compilation XLA : True / False, ou "auto" (Keras l'active sur GPU, jamais sur CPU)."""
+    if isinstance(value, bool):
+        return value
+    v = str(value).lower()
+    if v == "auto":
+        return "auto"
+    return v in ("1", "true", "yes")
+
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -99,7 +109,8 @@ def parse_args():
     p.add_argument("--train-subset", type=int, help="N premiers exemples du train (tests rapides).")
     p.add_argument("--seeds", type=int, nargs="+")
     p.add_argument("--precision", choices=["float32", "mixed_bfloat16"])
-    p.add_argument("--jit", type=lambda v: v.lower() in ("1", "true", "yes"), metavar="true|false")
+    p.add_argument("--jit", type=parse_jit, metavar="auto|true|false",
+                   help="Compilation XLA : auto (défaut, GPU seulement), true ou false.")
     p.add_argument("--out-dir")
     p.add_argument("--cpu", action="store_true", help="Force le CPU même si un GPU est disponible.")
     p.add_argument("--verbose", type=int, default=2)
@@ -161,7 +172,7 @@ def train_kwargs(config: dict, verbose: int) -> dict:
         weight_decay=config["weight_decay"],
         warmup_epochs=config["warmup_epochs"],
         augment=config["augment"],
-        jit_compile=True if config["jit"] else "auto",
+        jit_compile=parse_jit(config["jit"]),
         verbose=verbose,
     )
 
@@ -191,12 +202,14 @@ def run_seed(data: dict, config: dict, big: dict, seed: int, verbose: int, probs
         optimizer=config["optimizer"], lr=config["lr"], optimizer_kwargs=config["optimizer_kwargs"],
         **common,
     )
+    _cleanup()  # libère les modèles avant le run suivant (sinon la RAM grossit à chaque run)
 
     big_opt = big_agent_optimizer(config)
     print(f"\n=== Graine {seed} : grand agent {config['small_arch']} width={big['width']} "
           f"(cross-entropy, {big_opt['optimizer']}) ===")
     single = run_single_reference(data, arch=config["small_arch"], widths=big["width"], seed=seed,
                                   **big_opt, **common)
+    _cleanup()
 
     np.save(os.path.join(probs_dir, f"small_agents_s{seed}.npy"), collab.pop("test_probabilities"))
     np.save(os.path.join(probs_dir, f"big_agent_s{seed}.npy"), single.pop("test_probabilities"))
