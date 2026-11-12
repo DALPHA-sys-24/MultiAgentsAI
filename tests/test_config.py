@@ -44,8 +44,23 @@ def test_big_agent_needs_its_own_lr_when_lr_is_a_list():
 def test_command_line_overrides():
     p = argparse.ArgumentParser()
     add_config_arguments(p, AlphaSweepConfig)
-    args = p.parse_args(["--alphas", "0", "10", "--seeds", "2", "--lr", "0.05", "--augment", "false",
+    args = p.parse_args(["--alphas", "0", "10", "--n-runs", "2", "--lr", "0.05", "--augment", "false",
                          "--optimizer-kwargs", '{"global_clipnorm": 1.0}', "--jit", "false"])
     cfg = load_config(AlphaSweepConfig, "configs/alpha_sweep.json", overrides_from_args(args, AlphaSweepConfig))
-    assert cfg.alphas == [0.0, 10.0] and cfg.seeds == [2] and cfg.lr == 0.05
+    assert cfg.alphas == [0.0, 10.0] and cfg.seeds == [0, 1] and cfg.lr == 0.05
     assert cfg.augment is False and cfg.optimizer_kwargs == {"global_clipnorm": 1.0} and cfg.jit is False
+
+
+def test_run_dir_name():
+    cfg = load_config(CollabVsBigConfig, overrides={"dataset": "fashion_mnist", "num_agents": 3,
+                                                    "small_arch": "resnet20"})
+    assert cfg.run_dir().replace("\\", "/") == "runs/collab_vs_big_resnet20_fashion_mnist_x3"
+    tagged = load_config(AlphaSweepConfig, overrides={"dataset": "cifar10", "num_agents": 5, "tag": "adamw"})
+    assert tagged.run_name() == "alpha_sweep_resnet20_cifar10_x5_adamw"
+
+
+def test_signature_ignores_extensible_settings():
+    a = load_config(CollabVsBigConfig, overrides={"n_runs": 3})
+    b = load_config(CollabVsBigConfig, overrides={"n_runs": 10, "steps_per_execution": 1})
+    c = load_config(CollabVsBigConfig, overrides={"lr": 0.5})
+    assert a.signature() == b.signature() != c.signature()

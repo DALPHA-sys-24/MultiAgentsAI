@@ -3,7 +3,7 @@ Journalisation : messages à la console (donc dans le .out SLURM) et dans <run_d
 
     from logging_utils import setup_logging
     log = setup_logging()              # au début du script
-    setup_logging(run_dir)             # une fois le dossier de résultats connu : ajoute log.txt
+    setup_logging(run_dir)             # une fois le dossier connu : ajoute <run_dir>/log.txt
     log.info("message")
 
 Dans les autres modules : log = logging.getLogger(__name__).
@@ -17,8 +17,8 @@ _FORMAT = "%(asctime)s %(levelname)-7s %(message)s"
 _DATEFMT = "%H:%M:%S"
 
 
-def setup_logging(run_dir: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:
-    """Configure le logger racine (une seule fois) et ajoute un fichier log.txt si run_dir est donné."""
+def setup_logging(run_dir: Optional[str] = None, level: int = logging.INFO, filename: str = "log.txt") -> logging.Logger:
+    """Configure le logger racine (une seule fois) et ajoute le fichier <run_dir>/<filename> si run_dir est donné."""
     root = logging.getLogger()
     root.setLevel(level)
     if not any(getattr(h, "_dml_console", False) for h in root.handlers):
@@ -27,7 +27,7 @@ def setup_logging(run_dir: Optional[str] = None, level: int = logging.INFO) -> l
         console._dml_console = True
         root.addHandler(console)
     if run_dir is not None:
-        path = os.path.abspath(os.path.join(run_dir, "log.txt"))
+        path = os.path.abspath(os.path.join(run_dir, filename))
         if not any(getattr(h, "baseFilename", None) == path for h in root.handlers):
             os.makedirs(run_dir, exist_ok=True)
             handler = logging.FileHandler(path, encoding="utf-8")

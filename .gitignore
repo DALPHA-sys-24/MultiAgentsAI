@@ -7,10 +7,9 @@ __pycache__/
 # Environnements
 .venv*/
 venv*/
-venvs/
 
 # Résultats et journaux (trop gros pour Git ; à sauvegarder à part)
-results/
+runs/
 Logs/*
 !Logs/.keep
 *.npz

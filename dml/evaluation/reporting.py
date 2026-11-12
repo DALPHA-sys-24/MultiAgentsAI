@@ -29,8 +29,11 @@ def fmt_summary(m) -> str:
 
 
 def write_json(path: str, payload: dict) -> None:
-    """Écriture atomique : un results.json n'est jamais à moitié écrit si le job est tué."""
-    tmp = path + ".tmp"
+    """
+    Écriture atomique : un fichier n'est jamais à moitié écrit si le job est tué, et plusieurs
+    tâches du job array peuvent écrire le même fichier en même temps (fichier temporaire par processus).
+    """
+    tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w") as f:
         json.dump(payload, f, indent=2)
     os.replace(tmp, path)

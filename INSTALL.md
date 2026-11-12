@@ -10,7 +10,7 @@ py -3.12 -m venv .venv-cpu
 .\.venv-cpu\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements_cpu.txt
-python -m experiments.collab_vs_big --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --seeds 0
+python -m experiments.collab_vs_big --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --n-runs 1
 ```
 
 Si PowerShell refuse d'activer l'environnement : `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, une seule fois.
@@ -38,7 +38,7 @@ pip install --upgrade pip
 cd /mnt/c/Users/jketchak/Documents/DALPHAcommunity/UNAMUR/EUREKA/btwg_ml/MultiAgentsAI
 pip install -r requirements_gpu.txt
 python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
-python -m experiments.collab_vs_big --train-subset 2000 --epochs 2 --warmup-epochs 1 --seeds 0
+python -m experiments.collab_vs_big --train-subset 2000 --epochs 2 --warmup-epochs 1 --n-runs 1
 ```
 
 La ligne `[device]` au démarrage doit afficher le GPU. À chaque nouvelle session : `source ~/venvs/dml-gpu/bin/activate`.

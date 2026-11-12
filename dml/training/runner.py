@@ -114,6 +114,7 @@ def run_multi_experiment(
     csv_log: Optional[str] = None,
     callbacks: Optional[list] = None,
     evaluate_test: bool = True,
+    steps_per_execution: int = 1,
     verbose: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -134,6 +135,9 @@ def run_multi_experiment(
         eval_on: "final" (poids de la dernière époque) ou "best" (meilleure val_accuracy,
             nécessite checkpoint_dir et un ensemble de validation).
         csv_log: fichier CSV de l'historique par époque (CSVLogger Keras).
+        steps_per_execution: nombre de pas d'entraînement exécutés par appel au GPU. Mêmes
+            calculs, moins d'aller-retours Python <-> GPU : nettement plus rapide pour les petits
+            modèles. Les callbacks par batch ne sont appelés qu'une fois tous les N pas.
         evaluate_test: False = ne touche pas au test (recherche d'hyperparamètres) ; renvoie
             alors seulement l'historique et les infos de validation.
         Les autres arguments sont ceux de MultiAgentModel.compile.
@@ -183,6 +187,7 @@ def run_multi_experiment(
         single_agent_loss=single_agent_loss,
         eval_seed=seed or 0,
         jit_compile=jit_compile,
+        steps_per_execution=steps_per_execution,
     )
     # Construit tous les poids (backbones puis têtes) avant une éventuelle reprise
     image_shape = tuple(data["x_train"].shape[1:])

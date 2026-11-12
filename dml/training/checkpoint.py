@@ -1,7 +1,7 @@
 """
 Sauvegarde et reprise de l'entraînement d'un MultiAgentModel.
 
-    ckpt = TrainingCheckpoint("results/run/checkpoints/a10_s2")
+    ckpt = TrainingCheckpoint("runs/<run>/parts/a10_r2/checkpoint")
     initial_epoch = ckpt.restore(model)          # 0 si rien à reprendre
     model.fit(..., initial_epoch=initial_epoch, callbacks=[ckpt])
     ckpt.load_best(model)                        # poids de la meilleure époque (validation)

@@ -34,18 +34,41 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 │       ├── config.py           configs des expériences (dataclasses), JSON, ligne de commande
 │       ├── device.py           GPU si disponible, sinon CPU
 │       └── log.py              journal console + <run_dir>/log.txt
-├── experiments/                un script par expérience (minces : config -> dml.training.runner)
+├── experiments/                un script par expérience
+│   ├── common.py               socle commun : tâches, dossier de run, reprise, fusion des résultats
 │   ├── collab_vs_big.py        K petits agents vs 1 grand agent
 │   ├── alpha_sweep.py          balayage de alpha
-│   ├── best_hyperparams.py     recherche des meilleurs hyperparamètres (Optuna)
-│   └── merge_sweep.py          rassemble les jobs SLURM d'un balayage
+│   └── best_hyperparams.py     recherche des meilleurs hyperparamètres (Optuna)
 ├── configs/                    un JSON par expérience (collab_vs_big, alpha_sweep, best_hyperparams)
-├── slurm/                      scripts de soumission du cluster
+├── slurm/                      cluster (sbatch slurm/<expérience>.sh)
+│   ├── collab_vs_big.sh        job array : dataset x run x (petits | grand)
+│   ├── alpha_sweep.sh          job array : dataset x run x alpha
+│   ├── best_hyperparams.sh     job array : dataset x worker Optuna
+│   ├── merge.sh                fusion des résultats (soumise automatiquement)
+│   └── common.sh               fonctions communes (vérif. de --array, soumission de la fusion)
 ├── notebooks/                  analyse des résultats (resultats.ipynb, resultats_sweep.ipynb)
 ├── tests/                      tests pytest
-├── results/                    sorties des runs (ignoré par Git)
-└── Logs/                       sorties SLURM (ignoré par Git)
+├── runs/                       sorties des runs (ignoré par Git)
+└── Logs/                       sorties SLURM .out / .err (ignoré par Git)
 ```
+
+### Dossier d'un run
+
+Chaque expérience écrit dans `runs/<expérience>_<arch>_<dataset>_x<K>[_<tag>]/`, par exemple `runs/collab_vs_big_resnet20_fashion_mnist_x3/` :
+
+```
+runs/collab_vs_big_resnet20_fashion_mnist_x3/
+├── config.json          réglages, tailles des modèles, environnement (commit Git, versions)
+├── results.json         résumé sur les runs (médiane [q05 ; q95]) et détail par run
+├── probs/               probabilités de test de chaque run (.npy), lues par les notebooks
+├── parts/<tâche>/       une tâche : result.json, probs.npy, history.csv, checkpoint/
+│                        (collab_vs_big : small_r0, big_r0, small_r1... ; alpha_sweep : a0_r0, a1_r0...)
+└── logs/                journal de chaque processus (all.txt, task_003.txt, merge.txt)
+```
+
+- **Un run = une graine.** `n_runs = 10` lance les graines 0 à 9 ; `results.json` donne la médiane et les quantiles 5 % / 95 % sur ces runs.
+- **Même dossier = mêmes réglages.** Si le dossier existe avec d'autres réglages (lr, optimiseur, epochs...), le script s'arrête et le dit. Pour une variante, ajoute un suffixe : `--tag adamw` donne `runs/collab_vs_big_resnet20_fashion_mnist_x3_adamw/`. Seuls `n_runs` (et `alphas` pour le balayage) peuvent grandir : relancer avec `--n-runs 20` ajoute les graines 10 à 19 au même dossier.
+- **Reprise.** Une tâche terminée est sautée, une tâche interrompue reprend à sa dernière époque.
 
 **Toutes les commandes se lancent depuis la racine du dépôt** (le dossier qui contient `dml/`). Les scripts se lancent comme modules : `python -m experiments.alpha_sweep`. Pas besoin d'installer le package ; `pip install -e .` est possible si tu veux importer `dml` depuis n'importe quel dossier.
 
@@ -60,24 +83,31 @@ Où ajouter quoi :
 | un jeu de données | `dml/data/datasets.py` | `@register_dataset("nom")` |
 | un réglage de config | `dml/utils/config.py` | un champ `opt(...)` dans la dataclass (option `--nom` créée automatiquement) |
 | un hyperparamètre à chercher | `configs/best_hyperparams.json` | une entrée dans `search_space` (toute clé de la config) |
-| une expérience | `experiments/<nom>.py` + `configs/<nom>.json` + `slurm/soumission_<nom>.sh` | copier `alpha_sweep.py` comme modèle, avec une dataclass de config dans `dml/utils/config.py` |
+| une expérience | `experiments/<nom>.py` + `configs/<nom>.json` | une sous-classe de `Experiment` (`experiments/common.py`) avec `tasks`, `run_task`, `merge` ; copier `alpha_sweep.py` comme modèle. plus `slurm/<nom>.sh` copié de `slurm/alpha_sweep.sh` |
 
 Le nom enregistré est accepté partout ensuite : dans `compile(...)`, dans le JSON et sur la ligne de commande.
 
-## Nouveautés du 2026-11-12
+## Nouveautés : `runs/`, `n_runs`, job arrays
 
-**Nouvelle arborescence** (voir plus haut). Les commandes changent : `python run_experiment.py` devient `python -m experiments.collab_vs_big`, `python run_alpha_sweep.py` devient `python -m experiments.alpha_sweep`, `sbatch soumission_*.sh` devient `sbatch slurm/soumission_*.sh`. Les imports deviennent `from dml.core.multiagent import MultiAgentModel` (ou `from dml import MultiAgentModel`). Les noms des classes et des fonctions ne changent pas.
+- `--n-runs N` remplace `--seeds` (graines 0 à N - 1).
+- Les sorties vont dans `runs/<expérience>_<arch>_<dataset>_x<K>[_<tag>]/` au lieu de `results/<date>_<nom>/` (voir « Dossier d'un run »).
+- Sur le cluster : `sbatch slurm/<expérience>.sh`. Chaque dataset et chaque run (graine) devient une tâche GPU du job array, et toutes tournent en parallèle. Les K agents d'un run restent dans la même tâche, car ils sont entraînés ensemble avec une loss commune. Un job de fusion écrit `results.json` à la fin. `merge_sweep.py` est supprimé.
+- `steps_per_execution` (8 par défaut) : 8 pas d'entraînement par appel au GPU, moins d'aller-retours CPU ↔ GPU. Les résultats sont identiques (vérifié sous TF 2.15 et 2.21 : mêmes accuracies à chaque époque).
+
+## Nouveautés du 2026-11-12 (arborescence)
+
+**Nouvelle arborescence** (voir plus haut). Les commandes changent : `python run_experiment.py` devient `python -m experiments.collab_vs_big`, `python run_alpha_sweep.py` devient `python -m experiments.alpha_sweep`, `sbatch soumission_*.sh` devient `sbatch slurm/<expérience>.sh`. Les imports deviennent `from dml.core.multiagent import MultiAgentModel` (ou `from dml import MultiAgentModel`). Les noms des classes et des fonctions ne changent pas.
 
 Avec les réglages par défaut, l'entraînement est **identique au bit près** à la version précédente (vérifié en mode déterministe sous TF 2.15 : mêmes losses à chaque époque et mêmes accuracies), sauf le weight decay, qui ne touche plus BatchNorm ni les biais. Pour retrouver exactement l'ancien comportement : `"wd_exclude_norm_bias": false`.
 
 - **Loss de la référence au choix** (`reference_loss`). `"ce"` (défaut, comme avant) ou `"same_as_agents"` : le grand agent est entraîné avec la même forme de loss que les petits agents et I_k = 0 (`L_k²` en multiplicatif, comme les agents à α = 0). Les deux camps ont alors la même échelle de gradient, ce qui enlève l'effet « lr effectif » vu entre SGD et Adam.
 - **Forme de la loss** (`loss_form`) : `"multiplicative"` (défaut) ou `"additive"` (`L_k + α I_k`, qui redonne la CE à α = 0).
-- **Reprise après coupure.** L'état complet (poids, BatchNorm, optimiseurs, historique) est sauvegardé à chaque époque. Relancer la même commande (avec `--run-dir`, ou `--resume <dossier>`) saute ce qui est terminé et reprend l'entraînement en cours à sa dernière époque. Les poids finaux et ceux de la meilleure `val_accuracy` sont gardés (`checkpoints/<run>/final_weights.npz`, `best_weights.npz`).
+- **Reprise après coupure.** L'état complet (poids, BatchNorm, optimiseurs, historique) est sauvegardé à chaque époque. Relancer la même commande saute ce qui est terminé et reprend l'entraînement en cours à sa dernière époque. Les poids finaux et ceux de la meilleure `val_accuracy` sont gardés (`parts/<tâche>/checkpoint/final_weights.npz`, `best_weights.npz`).
 - **Meilleur modèle** : `"eval_on": "best"` évalue le test sur les poids de la meilleure époque de validation (défaut `"final"`, comme avant).
 - **Config vérifiée.** Une clé inconnue dans le JSON arrête le script (`Clé(s) inconnue(s) dans la config : 'epoch' (voulais-tu dire 'epochs' ?)`), ainsi qu'un nom de loss, de stratégie ou d'optimiseur inconnu, ou une liste par agent de mauvaise longueur. Les clés qui commencent par `_` sont des commentaires.
 - **Reproductibilité.** `config.json` contient une section `environment` : commit Git, branche, modifications non commitées (`git_dirty`), versions de Python / TF / Keras, machine, numéro de job SLURM, commande lancée.
 - **Évaluation reproductible** : la stratégie `vote` tire l'agent avec un générateur remis à zéro à chaque `evaluate` / `predict`, donc la même accuracy à chaque évaluation.
-- **Historique par époque** en CSV (`history/`), `log.txt` dans chaque dossier de résultats, arrêt immédiat si la loss devient NaN (`TerminateOnNaN`).
+- **Historique par époque** en CSV (`parts/<tâche>/history.csv`), journaux dans `logs/`, arrêt immédiat si la loss devient NaN (`TerminateOnNaN`).
 - **Une seule passe arrière ?** Testé : détacher les autres agents et dériver la somme des losses donne exactement les mêmes gradients, mais n'est pas plus rapide (≈ 500 ms par pas dans les deux cas, 5 × ResNet-20, CPU). TensorFlow ne parcourt déjà que le réseau de l'agent k pour le gradient de sa loss. Le `train_step` garde donc un gradient par agent.
 
 ## Configuration
@@ -207,12 +237,15 @@ python -m experiments.collab_vs_big --config configs/collab_vs_big.json
 # surcharger un réglage sans toucher au fichier
 python -m experiments.collab_vs_big --config configs/collab_vs_big.json --dataset fashion_mnist --epochs 50
 # test rapide (quelques minutes sur CPU)
-python -m experiments.collab_vs_big --cpu --train-subset 2000 --epochs 2 --seeds 0
+python -m experiments.collab_vs_big --cpu --train-subset 2000 --epochs 2 --n-runs 1
+# 10 runs pour la médiane et les quantiles
+python -m experiments.collab_vs_big --dataset fashion_mnist --num-agents 3 --optimizer sgd --lr 0.01 --epochs 20 --batch-size 128 --n-runs 10
 ```
 
 - **Petits agents** : `num_agents` agents `small_arch` entraînés ensemble avec `loss_type` + `strategy` (par défaut 5 × resnet20, `global_interaction` + `simplicial`).
 - **Grand agent** : la même architecture élargie. La largeur est cherchée automatiquement pour avoir autant de paramètres entraînables que les petits réunis (5 × ResNet-20 = 1,36 M ; grand ResNet-20 largeur ≈ 2,24 → 1,36 M, écart < 0,3 %). Il est entraîné seul, en cross-entropy (`reference_loss: "ce"`) ou avec la même forme de loss que les petits agents et I_k = 0 (`reference_loss: "same_as_agents"`, soit `L_k²` en multiplicatif), avec les mêmes données, augmentation, optimiseur, epochs et graine.
-- **Résultats** dans `results/<date>_<nom>/` (ou `--run-dir`) : `config.json` (config utilisée, matériel, nombres de paramètres, largeur du grand agent, commit Git et versions), `results.json` (par graine : accuracy, NLL, ECE de chaque petit agent, du consensus et du grand agent, historiques par epoch ; résumé par médiane et quantiles 5 % / 95 % sur les graines, moyenne et écart-type gardés pour info), `probs/*.npy` (probabilités de test), `history/*.csv` (historique par époque), `checkpoints/` (poids), `log.txt`. `results.json` est réécrit après chaque graine.
+- **Tâches** : `small_r<i>` (les K petits agents du run i) et `big_r<i>` (le grand agent du run i), soit 2 × `n_runs` tâches indépendantes.
+- **Résultats** dans `runs/collab_vs_big_<arch>_<dataset>_x<K>/` : `config.json` (config utilisée, matériel, nombres de paramètres, largeur du grand agent, commit Git et versions), `results.json` (par run : accuracy, NLL, ECE de chaque petit agent, du consensus et du grand agent, historiques par epoch ; résumé par médiane et quantiles 5 % / 95 % sur les runs), `probs/small_agents_s<graine>.npy` et `big_agent_s<graine>.npy`, `parts/` (historique CSV et poids de chaque tâche). `results.json` est réécrit après chaque run complet.
 - Un tableau final compare, en médiane [quantile 5 % ; quantile 95 %] sur les graines : grand agent seul, consensus des petits, moyenne simple des petits, petit agent médian, meilleur petit agent. Le notebook `notebooks/resultats.ipynb` affiche les mêmes statistiques en tableaux et figures.
 
 ### Expérience : impact de la collaboration (balayage de alpha)
@@ -220,12 +253,13 @@ python -m experiments.collab_vs_big --cpu --train-subset 2000 --epochs 2 --seeds
 ```bash
 python -m experiments.alpha_sweep                                  # configs/alpha_sweep.json
 python -m experiments.alpha_sweep --alphas 0 1 10 --epochs 50      # surcharger un réglage
-python -m experiments.alpha_sweep --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --alphas 0 1 --seeds 0   # test rapide
+python -m experiments.alpha_sweep --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --alphas 0 1 --n-runs 1   # test rapide
 ```
 
 - `num_agents` agents `arch` entraînés avec `loss_type` pour chaque valeur de `alphas` (par défaut 0, 0.5, 1, 10, 50, 100), sur chaque graine.
 - **alpha = 0** : pas d'interaction (loss `L_k²`, agents indépendants), consensus par **vote majoritaire**. **alpha > 0** : consensus avec la `strategy` du fichier de config.
-- **Résultats** dans `results/<date>_alpha_sweep/` : `config.json`, `results.json` (par alpha et par graine : accuracy du consensus, de la moyenne simple, de chaque agent, NLL/ECE, désaccord entre agents, historiques ; résumé par alpha en médiane et quantiles 5 % / 95 %), `probs/agents_alpha<a>_s<graine>.npy`.
+- **Tâches** : une par (alpha, run), nommées `a<alpha>_r<i>`.
+- **Résultats** dans `runs/alpha_sweep_<arch>_<dataset>_x<K>/` : `config.json`, `results.json` (par alpha et par graine : accuracy du consensus, de la moyenne simple, de chaque agent, NLL/ECE, désaccord entre agents, historiques ; résumé par alpha en médiane et quantiles 5 % / 95 %), `probs/agents_alpha<a>_s<graine>.npy`.
 - Le tableau final donne, pour chaque alpha : consensus, moyenne simple, agent médian, meilleur agent et désaccord moyen entre agents (diversité).
 
 Depuis Python :
@@ -249,8 +283,8 @@ print(out["summary"])
 pip install optuna                                             # une fois (cluster : pip install --user optuna)
 python -m experiments.best_hyperparams                         # configs/best_hyperparams.json
 python -m experiments.best_hyperparams --dataset cifar10 --arch resnet32 --num-agents 3 --n-trials 50
-python -m experiments.best_hyperparams --cpu --train-subset 2000 --epochs 3 --n-trials 4    # test rapide
-sbatch slurm/soumission_best_hyperparams.sh                    # 4 jobs GPU sur la même recherche
+python -m experiments.best_hyperparams --cpu --train-subset 2000 --epochs 3 --n-trials 2 --n-workers 1   # test rapide
+sbatch slurm/best_hyperparams.sh                    # cluster : 8 GPU sur la même recherche
 ```
 
 J'utilise [Optuna](https://optuna.org) plutôt que Keras Tuner :
@@ -275,23 +309,31 @@ Les autres réglages (jeu de données, `arch`, `num_agents`, `loss_type`, `epoch
 
 **Critère.** `metric` vaut `val_accuracy` (accuracy du consensus, défaut), `val_agent_accuracy` (accuracy moyenne des agents) ou `val_loss`. Chaque essai est noté sur la meilleure époque de **validation**, et le test n'est jamais utilisé pendant la recherche.
 
-**Résultats** dans `results/<date>_best_hyperparams/` (ou `--run-dir`) :
+**Parallélisation.** Une tâche = un worker qui lance `n_trials` essais ; les `n_workers` workers partagent la même étude (`study.journal`), soit `n_workers × n_trials` essais au total. En local, les workers tournent l'un après l'autre.
+
+**Résultats** dans `runs/best_hyperparams_<arch>_<dataset>_x<K>/` :
 - `best.json` : meilleur essai, ses paramètres, importance de chaque hyperparamètre ;
 - `trials.csv` : tous les essais, avec leur état (terminé, arrêté tôt, échoué) ;
-- `best_config.json` : config prête pour l'évaluation finale sur le test avec plusieurs graines, `python -m experiments.alpha_sweep --config results/.../best_config.json --epochs 200`.
+- `best_config.json` : config prête pour l'évaluation finale sur le test avec plusieurs graines, `python -m experiments.alpha_sweep --config runs/best_hyperparams_.../best_config.json --epochs 200` (dossier `runs/alpha_sweep_..._best/`).
 
-Relancer avec le même `--run-dir` complète la recherche.
+Relancer la même commande ajoute des essais à la recherche existante.
 
 ### Sur le cluster
 
+Un script sbatch par expérience. Les réglages sont en tête du script (datasets, `N_RUNS`, hyperparamètres) ; ceux qui n'y sont pas viennent de `configs/<expérience>.json`. Depuis la racine du dépôt :
+
 ```bash
-sbatch slurm/soumission_alpha_sweep.sh            # un job par (alpha, graine)
-python -m experiments.merge_sweep results/alpha_sweep   # rassemble les jobs pour notebooks/resultats_sweep.ipynb
-sbatch slurm/soumission_collab_vs_big.sh
-sbatch slurm/soumission_best_hyperparams.sh   # recherche d'hyperparamètres (pip install --user optuna avant)
+sbatch slurm/collab_vs_big.sh      # 2 datasets x 10 runs x (petits | grand) = 40 tâches -> --array=0-39
+sbatch slurm/alpha_sweep.sh        # 2 datasets x 5 runs x 3 alphas = 30 tâches -> --array=0-29
+sbatch slurm/best_hyperparams.sh   # 1 dataset x 8 workers = 8 tâches -> --array=0-7 (pip install --user optuna avant)
 ```
 
-Un job coupé (limite de temps, nœud perdu) se relance avec la même commande (`sbatch --array=7 slurm/soumission_alpha_sweep.sh` pour un seul job du sweep) : il reprend à la dernière époque sauvegardée.
+- **Une tâche = un dataset × un run** (× petits agents / grand agent, ou × alpha). L'indice `SLURM_ARRAY_TASK_ID` donne le dataset et la tâche, comme dans les autres projets. Toutes les tâches tournent en parallèle. Les K agents d'un run sont dans la même tâche.
+- **Taille du job array** : si tu changes `DATASETS`, `N_RUNS` ou `ALPHAS`, mets à jour `#SBATCH --array=0-<N_TOTAL - 1>` (la valeur est en commentaire à côté). Un `--array` trop court est signalé dans le `.out` de la tâche 0, et les indices en trop ne font rien.
+- **Fusion** : la 1re tâche de chaque dataset soumet `slurm/merge.sh`, qui démarre quand tout le job array est fini et écrit `results.json` (`AUTO_MERGE=0 sbatch ...` pour ne pas le faire). Chaque tâche met aussi `results.json` à jour en finissant : les résultats partiels sont lisibles pendant la campagne. À la main : `python -m experiments.collab_vs_big [mêmes options] --merge-only`.
+- **Sorties SLURM** dans `Logs/<expérience>_<job>_<tâche>.out / .err` ; résultats dans `runs/<expérience>_<arch>_<dataset>_x<K>/`.
+- **Relancer** le même script ne refait que les tâches non terminées ; une tâche coupée reprend à sa dernière époque. Une seule tâche : `sbatch --array=7 slurm/collab_vs_big.sh`.
+- **Données** : télécharger une fois depuis le nœud de connexion si les nœuds de calcul n'ont pas Internet (`python -c "from dml.data import download_dataset; download_dataset('cifar10')"`). Les tâches qui démarrent ensemble lisent le cache l'une après l'autre (verrou), sans se gêner.
 
 ### Avec Git
 
@@ -300,7 +342,7 @@ git pull                     # sur le cluster comme en local, au lieu de copier 
 python -m pytest             # avant de lancer une campagne : ~1 min sur CPU
 ```
 
-Lancer les campagnes depuis un code commité : `config.json` enregistre alors le commit exact (`git_dirty: false`). `results/`, `Logs/` et les poids (`*.npz`, `*.npy`) sont ignorés par Git (`.gitignore`).
+Lancer les campagnes depuis un code commité : `config.json` enregistre alors le commit exact (`git_dirty: false`). `runs/`, `Logs/` et les poids (`*.npz`, `*.npy`) sont ignorés par Git (`.gitignore`).
 
 ## Tests
 

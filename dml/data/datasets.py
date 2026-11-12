@@ -9,6 +9,8 @@ Ajouter un jeu de données :
     def mon_jeu():
         return (x_train, y_train), (x_test, y_test)   # images (N, H, W[, C]) uint8, labels entiers
 """
+import contextlib
+import os
 from typing import Callable, Dict, List
 
 import numpy as np
@@ -36,6 +38,39 @@ register_dataset("cifar10")(tf.keras.datasets.cifar10.load_data)
 register_dataset("cifar100")(tf.keras.datasets.cifar100.load_data)
 
 
+@contextlib.contextmanager
+def _download_lock():
+    """
+    Un seul processus à la fois télécharge / décompresse dans ~/.keras/datasets : les tâches d'un
+    job array démarrent en même temps et pourraient sinon écrire le même fichier ensemble.
+    """
+    try:
+        import fcntl
+    except ImportError:          # Windows : pas de verrou (un seul processus en local)
+        yield
+        return
+    path = os.path.join(os.path.expanduser("~"), ".keras")
+    os.makedirs(path, exist_ok=True)
+    with open(os.path.join(path, "dml_download.lock"), "w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        except OSError:          # système de fichiers sans verrous : on continue sans
+            pass
+        yield
+
+
+def _read(name: str):
+    if name not in _LOADERS:
+        raise ValueError(f"Jeu de données inconnu : {name}. Choix : {list(_LOADERS)}")
+    with _download_lock():
+        return _LOADERS[name]()
+
+
+def download_dataset(name: str) -> None:
+    """Télécharge le jeu de données dans le cache Keras (~/.keras/datasets) sans le préparer."""
+    _read(name)
+
+
 def load_dataset(name: str, val_size: int = 5000, seed: int = 0) -> Dict[str, np.ndarray]:
     """
     Charge un jeu de données, normalise par canal (statistiques du train) et
@@ -46,9 +81,7 @@ def load_dataset(name: str, val_size: int = 5000, seed: int = 0) -> Dict[str, np
         Images en float32 (N, H, W, C), labels en int32 (N,).
         Fashion-MNIST reste en 28x28x1 : les modèles acceptent n'importe quel nombre de canaux.
     """
-    if name not in _LOADERS:
-        raise ValueError(f"Jeu de données inconnu : {name}. Choix : {list(_LOADERS)}")
-    (x_train, y_train), (x_test, y_test) = _LOADERS[name]()
+    (x_train, y_train), (x_test, y_test) = _read(name)
 
     if x_train.ndim == 3:
         x_train, x_test = x_train[..., None], x_test[..., None]

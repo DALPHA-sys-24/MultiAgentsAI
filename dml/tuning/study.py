@@ -1,5 +1,4 @@
 """Création de l'étude Optuna et export des résultats."""
-import json
 import logging
 import os
 from typing import Any, Dict
@@ -62,7 +61,9 @@ def export_results(study, run_dir: str, base_config: Dict[str, Any], decode) -> 
     """Écrit trials.csv (tous les essais) et best.json (meilleur essai, config complète, importances)."""
     import optuna
     df = study.trials_dataframe(attrs=("number", "value", "state", "params", "user_attrs", "duration"))
-    df.to_csv(os.path.join(run_dir, "trials.csv"), index=False)
+    tmp = os.path.join(run_dir, f"trials.csv.{os.getpid()}.tmp")   # plusieurs workers écrivent en même temps
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, os.path.join(run_dir, "trials.csv"))
 
     complete = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     states = {s.name: sum(t.state == s for t in study.trials) for s in optuna.trial.TrialState}
@@ -86,8 +87,6 @@ def export_results(study, run_dir: str, base_config: Dict[str, Any], decode) -> 
                                             optuna.importance.get_param_importances(study).items()}
         except Exception as exc:  # importance impossible (un seul paramètre varié, valeurs identiques...)
             log.info("Importances non calculées : %s", exc)
-    tmp = os.path.join(run_dir, "best.json.tmp")
-    with open(tmp, "w") as f:
-        json.dump(summary, f, indent=2)
-    os.replace(tmp, os.path.join(run_dir, "best.json"))
+    from dml.evaluation.reporting import write_json
+    write_json(os.path.join(run_dir, "best.json"), summary)
     return summary

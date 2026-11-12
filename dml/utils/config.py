@@ -76,7 +76,6 @@ def parse_jit(value):
 @dataclass
 class TrainConfig:
     """Réglages communs à toutes les expériences."""
-    name: str = opt("experiment", "Nom de l'expérience (dossier de résultats).")
     dataset: str = opt("cifar10", "Jeu de données.", choices=available_datasets())
 
     num_agents: int = opt(5, "Nombre d'agents K.")
@@ -100,14 +99,22 @@ class TrainConfig:
 
     val_size: int = opt(5000, "Taille de la validation, tirée du train.")
     train_subset: Optional[int] = opt(None, "N premiers exemples du train (tests rapides).", kind="int_or_none")
-    seeds: List[int] = opt([0, 1, 2], "Graines.", kind="list_int")
+    n_runs: int = opt(3, "Nombre de runs (graines 0 à n_runs - 1) pour la médiane et les quantiles.")
 
     precision: str = opt("float32", "Précision des calculs.", choices=PRECISIONS)
     jit: Union[str, bool] = opt("auto", "Compilation XLA : auto (GPU seulement), true ou false.", kind="jit")
     eval_on: str = opt("final", "Évaluer le test sur les poids finaux ou ceux de la meilleure val_accuracy.",
                        choices=EVAL_ON)
+    steps_per_execution: int = opt(8, "Pas d'entraînement par appel au GPU (plus rapide, mêmes calculs).")
     checkpoint_every: int = opt(1, "Sauvegarde de l'état de reprise toutes les N époques.")
-    out_dir: str = opt("results", "Dossier racine des résultats.")
+    out_dir: str = opt("runs", "Dossier racine des runs.")
+    tag: Optional[str] = opt(None, "Suffixe du dossier de run, pour séparer deux variantes "
+                                   "(ex. lr001 -> runs/<exp>_<arch>_<dataset>_x<K>_lr001).", kind="str_or_none")
+
+    EXPERIMENT = "experiment"          # nom de l'expérience, début du nom du dossier de run
+    # Réglages qui peuvent changer entre deux lancements dans le même dossier de run
+    # (ajouter des runs, des alphas...) sans mélanger deux expériences différentes.
+    EXTENSIBLE = ("n_runs", "out_dir", "jit", "steps_per_execution", "checkpoint_every")
 
     # ------------------------------------------------------------------------
     def validate(self):
@@ -136,7 +143,28 @@ class TrainConfig:
         return []
 
     def to_dict(self) -> Dict[str, Any]:
-        return dataclasses.asdict(self)
+        return {"experiment": self.EXPERIMENT, **dataclasses.asdict(self)}
+
+    @property
+    def seeds(self) -> List[int]:
+        """Graine de chaque run : 0, 1, ..., n_runs - 1."""
+        return list(range(self.n_runs))
+
+    @property
+    def model_arch(self) -> str:
+        return getattr(self, "arch", None) or getattr(self, "small_arch")
+
+    def run_name(self) -> str:
+        """<expérience>_<arch>_<dataset>_x<K>[_<tag>]"""
+        name = f"{self.EXPERIMENT}_{self.model_arch}_{self.dataset}_x{self.num_agents}"
+        return f"{name}_{self.tag}" if self.tag else name
+
+    def run_dir(self) -> str:
+        return os.path.join(self.out_dir, self.run_name())
+
+    def signature(self) -> Dict[str, Any]:
+        """Réglages qui définissent l'expérience : ils doivent être identiques dans un même dossier de run."""
+        return {k: v for k, v in self.to_dict().items() if k not in self.EXTENSIBLE}
 
     def train_kwargs(self, verbose: int = 2) -> Dict[str, Any]:
         """Réglages d'entraînement communs, au format de experiment.run_multi_experiment."""
@@ -150,6 +178,7 @@ class TrainConfig:
             form=self.loss_form,
             eval_on=self.eval_on,
             checkpoint_every=self.checkpoint_every,
+            steps_per_execution=self.steps_per_execution,
             jit_compile=parse_jit(self.jit),
             verbose=verbose,
         )
@@ -158,7 +187,7 @@ class TrainConfig:
 @dataclass
 class CollabVsBigConfig(TrainConfig):
     """K petits agents collaboratifs vs 1 grand agent au même nombre de paramètres."""
-    name: str = opt("collab_vs_big", "Nom de l'expérience (dossier de résultats).")
+    EXPERIMENT = "collab_vs_big"
     small_arch: str = opt("resnet20", "Architecture des petits agents (le grand agent est la même, élargie).")
     alpha: float = opt(1.0, "Poids du terme d'interaction.")
     big_optimizer: Optional[str] = opt(None, "Optimiseur du grand agent (défaut : celui des petits).",
@@ -185,7 +214,8 @@ class CollabVsBigConfig(TrainConfig):
 @dataclass
 class AlphaSweepConfig(TrainConfig):
     """Balayage du poids alpha de l'interaction."""
-    name: str = opt("alpha_sweep", "Nom de l'expérience (dossier de résultats).")
+    EXPERIMENT = "alpha_sweep"
+    EXTENSIBLE = TrainConfig.EXTENSIBLE + ("alphas",)
     arch: str = opt("resnet20", "Architecture des agents.")
     alphas: List[float] = opt([0, 0.5, 1, 10, 50, 100], "Valeurs de alpha à tester.", kind="list_float")
     lr: Union[float, List[float]] = opt(0.01, "Un lr pour tous les agents, ou un par agent "
@@ -209,14 +239,15 @@ SEARCH_PRUNERS = ("median", "hyperband", "none")
 @dataclass
 class HyperparamSearchConfig(TrainConfig):
     """Recherche des meilleurs hyperparamètres (Optuna) pour une architecture et un jeu de données."""
-    name: str = opt("best_hyperparams", "Nom de la recherche (dossier de résultats).")
+    EXPERIMENT = "best_hyperparams"
     arch: str = opt("resnet20", "Architecture des agents.")
     alpha: float = opt(1.0, "Poids du terme d'interaction (si absent de search_space).")
-    seeds: List[int] = opt([0], "Graine des essais (seule la première est utilisée).", kind="list_int")
+    n_runs: int = opt(1, "Ignoré : chaque essai utilise la graine 0.")
+    n_workers: int = opt(4, "Nombre de processus (tâches du job array) qui travaillent sur la même recherche.")
     epochs: int = opt(20, "Époques par essai.")
     search_space: Dict[str, Any] = opt(DEFAULT_SEARCH_SPACE, "Espace de recherche (JSON, voir dml/tuning/space.py).",
                                        kind="json")
-    n_trials: int = opt(30, "Nombre d'essais lancés par ce processus (plusieurs jobs s'additionnent).")
+    n_trials: int = opt(30, "Nombre d'essais par processus (au total : n_workers x n_trials).")
     timeout_hours: Optional[float] = opt(None, "Arrête de lancer de nouveaux essais après ce temps.",
                                          kind="float_or_none")
     metric: str = opt("val_accuracy", "Critère : accuracy du consensus, accuracy moyenne des agents, "
@@ -226,15 +257,17 @@ class HyperparamSearchConfig(TrainConfig):
     pruner_warmup_epochs: int = opt(3, "Époques avant qu'un essai puisse être arrêté.")
     study_seed: int = opt(0, "Graine du sampler.")
 
-    SEARCH_FIELDS = ("search_space", "n_trials", "timeout_hours", "metric", "sampler", "pruner",
+    SEARCH_FIELDS = ("search_space", "n_trials", "n_workers", "timeout_hours", "metric", "sampler", "pruner",
                      "pruner_warmup_epochs", "study_seed")
+    EXTENSIBLE = TrainConfig.EXTENSIBLE + ("n_trials", "n_workers", "timeout_hours", "study_seed")
 
     @property
     def direction(self) -> str:
         return SEARCH_METRICS[self.metric]
 
     def searchable_fields(self) -> List[str]:
-        return [f.name for f in dataclasses.fields(self) if f.name not in self.SEARCH_FIELDS + ("name", "out_dir")]
+        return [f.name for f in dataclasses.fields(self)
+                if f.name not in self.SEARCH_FIELDS + ("out_dir", "tag", "n_runs")]
 
     def _extra_checks(self) -> List[str]:
         from dml.tuning.space import validate_space
@@ -260,7 +293,8 @@ def _unknown_keys_message(cls, unknown: List[str]) -> str:
 def config_from_dict(cls, values: Dict[str, Any], strict: bool = True):
     """Crée une config ; strict=False ignore les clés inconnues (relecture d'un config.json enregistré)."""
     known = {f.name for f in dataclasses.fields(cls)}
-    values = {k: v for k, v in values.items() if not k.startswith("_")}
+    # "_..." = commentaires ; "experiment" = écrit dans config.json (une config enregistrée peut resservir)
+    values = {k: v for k, v in values.items() if not k.startswith("_") and k != "experiment"}
     unknown = sorted(set(values) - known)
     if unknown and strict:
         raise SystemExit(_unknown_keys_message(cls, unknown))

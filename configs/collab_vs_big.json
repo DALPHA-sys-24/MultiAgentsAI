@@ -1,5 +1,4 @@
 {
-  "name": "collab_vs_big",
   "dataset": "cifar10",
   "small_arch": "resnet20",
   "num_agents": 5,
@@ -24,10 +23,12 @@
   "per_agent_views": false,
   "val_size": 5000,
   "train_subset": null,
-  "seeds": [0, 1, 2],
+  "n_runs": 3,
   "eval_on": "final",
   "checkpoint_every": 1,
   "precision": "float32",
   "jit": "auto",
-  "out_dir": "results"
+  "steps_per_execution": 8,
+  "out_dir": "runs",
+  "tag": null
 }
