@@ -196,6 +196,54 @@ class AlphaSweepConfig(TrainConfig):
         return STRATEGY_NO_INTERACTION if alpha == 0 else self.strategy
 
 
+DEFAULT_SEARCH_SPACE = {
+    "lr": {"type": "float", "low": 1e-4, "high": 0.3, "log": True},
+    "weight_decay": {"type": "float", "low": 1e-5, "high": 1e-2, "log": True},
+    "alpha": {"type": "float", "low": 0.0, "high": 50.0},
+}
+SEARCH_METRICS = {"val_accuracy": "maximize", "val_agent_accuracy": "maximize", "val_loss": "minimize"}
+SEARCH_SAMPLERS = ("tpe", "random", "cmaes")
+SEARCH_PRUNERS = ("median", "hyperband", "none")
+
+
+@dataclass
+class HyperparamSearchConfig(TrainConfig):
+    """Recherche des meilleurs hyperparamètres (Optuna) pour une architecture et un jeu de données."""
+    name: str = opt("best_hyperparams", "Nom de la recherche (dossier de résultats).")
+    arch: str = opt("resnet20", "Architecture des agents.")
+    alpha: float = opt(1.0, "Poids du terme d'interaction (si absent de search_space).")
+    seeds: List[int] = opt([0], "Graine des essais (seule la première est utilisée).", kind="list_int")
+    epochs: int = opt(20, "Époques par essai.")
+    search_space: Dict[str, Any] = opt(DEFAULT_SEARCH_SPACE, "Espace de recherche (JSON, voir dml/tuning/space.py).",
+                                       kind="json")
+    n_trials: int = opt(30, "Nombre d'essais lancés par ce processus (plusieurs jobs s'additionnent).")
+    timeout_hours: Optional[float] = opt(None, "Arrête de lancer de nouveaux essais après ce temps.",
+                                         kind="float_or_none")
+    metric: str = opt("val_accuracy", "Critère : accuracy du consensus, accuracy moyenne des agents, "
+                                      "ou loss sur la validation.", choices=tuple(SEARCH_METRICS))
+    sampler: str = opt("tpe", "Stratégie de tirage des essais.", choices=SEARCH_SAMPLERS)
+    pruner: str = opt("median", "Arrêt précoce des essais mauvais.", choices=SEARCH_PRUNERS)
+    pruner_warmup_epochs: int = opt(3, "Époques avant qu'un essai puisse être arrêté.")
+    study_seed: int = opt(0, "Graine du sampler.")
+
+    SEARCH_FIELDS = ("search_space", "n_trials", "timeout_hours", "metric", "sampler", "pruner",
+                     "pruner_warmup_epochs", "study_seed")
+
+    @property
+    def direction(self) -> str:
+        return SEARCH_METRICS[self.metric]
+
+    def searchable_fields(self) -> List[str]:
+        return [f.name for f in dataclasses.fields(self) if f.name not in self.SEARCH_FIELDS + ("name", "out_dir")]
+
+    def _extra_checks(self) -> List[str]:
+        from dml.tuning.space import validate_space
+        errors = validate_space(self.search_space, self.searchable_fields())
+        if self.val_size <= 0:
+            errors.append("val_size doit être > 0 : les essais sont comparés sur la validation")
+        return errors
+
+
 # =============================================================================
 # LECTURE
 # =============================================================================

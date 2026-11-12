@@ -23,6 +23,10 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 │   │   ├── optimizers.py       optimiseurs par nom (@register_optimizer), schedule, weight decay
 │   │   ├── checkpoint.py       sauvegarde à chaque époque, reprise, meilleurs poids
 │   │   └── runner.py           run_multi_experiment, run_single_reference, match_width, benchmark
+│   ├── tuning/                 recherche d'hyperparamètres (Optuna)
+│   │   ├── space.py            espace de recherche décrit en JSON
+│   │   ├── pruning.py          arrêt précoce des essais mauvais
+│   │   └── study.py            étude partagée entre jobs, export des résultats
 │   ├── evaluation/
 │   │   ├── metrics.py          accuracy, NLL, ECE, désaccord
 │   │   └── reporting.py        médiane [q05 ; q95] sur les graines, tableaux
@@ -33,8 +37,9 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 ├── experiments/                un script par expérience (minces : config -> dml.training.runner)
 │   ├── collab_vs_big.py        K petits agents vs 1 grand agent
 │   ├── alpha_sweep.py          balayage de alpha
+│   ├── best_hyperparams.py     recherche des meilleurs hyperparamètres (Optuna)
 │   └── merge_sweep.py          rassemble les jobs SLURM d'un balayage
-├── configs/                    un JSON par expérience (collab_vs_big.json, alpha_sweep.json)
+├── configs/                    un JSON par expérience (collab_vs_big, alpha_sweep, best_hyperparams)
 ├── slurm/                      scripts de soumission du cluster
 ├── notebooks/                  analyse des résultats (resultats.ipynb, resultats_sweep.ipynb)
 ├── tests/                      tests pytest
@@ -54,6 +59,7 @@ Où ajouter quoi :
 | un optimiseur | `dml/training/optimizers.py` | `@register_optimizer("nom")` |
 | un jeu de données | `dml/data/datasets.py` | `@register_dataset("nom")` |
 | un réglage de config | `dml/utils/config.py` | un champ `opt(...)` dans la dataclass (option `--nom` créée automatiquement) |
+| un hyperparamètre à chercher | `configs/best_hyperparams.json` | une entrée dans `search_space` (toute clé de la config) |
 | une expérience | `experiments/<nom>.py` + `configs/<nom>.json` + `slurm/soumission_<nom>.sh` | copier `alpha_sweep.py` comme modèle, avec une dataclass de config dans `dml/utils/config.py` |
 
 Le nom enregistré est accepté partout ensuite : dans `compile(...)`, dans le JSON et sur la ligne de commande.
@@ -237,12 +243,52 @@ out = benchmark_architectures(
 print(out["summary"])
 ```
 
+### Recherche des meilleurs hyperparamètres
+
+```bash
+pip install optuna                                             # une fois (cluster : pip install --user optuna)
+python -m experiments.best_hyperparams                         # configs/best_hyperparams.json
+python -m experiments.best_hyperparams --dataset cifar10 --arch resnet32 --num-agents 3 --n-trials 50
+python -m experiments.best_hyperparams --cpu --train-subset 2000 --epochs 3 --n-trials 4    # test rapide
+sbatch slurm/soumission_best_hyperparams.sh                    # 4 jobs GPU sur la même recherche
+```
+
+J'utilise [Optuna](https://optuna.org) plutôt que Keras Tuner :
+- il ne demande pas de réécrire le modèle sous forme de `HyperModel`, et il marche donc avec `MultiAgentModel` et ses K optimiseurs ;
+- son sampler TPE (bayésien) trouve de bonnes régions plus vite qu'une grille ou que le hasard ;
+- il arrête tôt les essais mauvais (pruning médian ou Hyperband) ;
+- plusieurs jobs SLURM peuvent travailler sur la même étude, grâce au fichier journal, qui marche aussi sur un disque réseau ;
+- il calcule l'importance de chaque hyperparamètre.
+
+**Ce qui est cherché.** `search_space` dans `configs/best_hyperparams.json` contient une entrée par hyperparamètre. Toute clé de la config peut y figurer (`lr`, `weight_decay`, `alpha`, `temperature`, `optimizer`, `batch_size`, `optimizer_kwargs`, `loss_type`, `arch`...) :
+
+```json
+"search_space": {
+  "lr":           {"type": "float", "low": 0.0001, "high": 0.3, "log": true},
+  "alpha":        {"type": "float", "low": 0.0, "high": 50.0},
+  "batch_size":   {"type": "int", "low": 64, "high": 256, "step": 64},
+  "optimizer":    {"type": "categorical", "choices": ["sgd", "adam", "adamw"]}
+}
+```
+
+Les autres réglages (jeu de données, `arch`, `num_agents`, `loss_type`, `epochs` par essai...) sont fixés dans le même fichier.
+
+**Critère.** `metric` vaut `val_accuracy` (accuracy du consensus, défaut), `val_agent_accuracy` (accuracy moyenne des agents) ou `val_loss`. Chaque essai est noté sur la meilleure époque de **validation**, et le test n'est jamais utilisé pendant la recherche.
+
+**Résultats** dans `results/<date>_best_hyperparams/` (ou `--run-dir`) :
+- `best.json` : meilleur essai, ses paramètres, importance de chaque hyperparamètre ;
+- `trials.csv` : tous les essais, avec leur état (terminé, arrêté tôt, échoué) ;
+- `best_config.json` : config prête pour l'évaluation finale sur le test avec plusieurs graines, `python -m experiments.alpha_sweep --config results/.../best_config.json --epochs 200`.
+
+Relancer avec le même `--run-dir` complète la recherche.
+
 ### Sur le cluster
 
 ```bash
 sbatch slurm/soumission_alpha_sweep.sh            # un job par (alpha, graine)
 python -m experiments.merge_sweep results/alpha_sweep   # rassemble les jobs pour notebooks/resultats_sweep.ipynb
 sbatch slurm/soumission_collab_vs_big.sh
+sbatch slurm/soumission_best_hyperparams.sh   # recherche d'hyperparamètres (pip install --user optuna avant)
 ```
 
 Un job coupé (limite de temps, nœud perdu) se relance avec la même commande (`sbatch --array=7 slurm/soumission_alpha_sweep.sh` pour un seul job du sweep) : il reprend à la dernière époque sauvegardée.

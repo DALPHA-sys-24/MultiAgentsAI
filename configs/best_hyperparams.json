@@ -1,0 +1,46 @@
+{
+  "_note": "Recherche Optuna. search_space : une entrée par hyperparamètre (type float / int / categorical). Toute clé de la config peut y figurer.",
+  "name": "best_hyperparams",
+  "dataset": "fashion_mnist",
+
+  "arch": "resnet20",
+  "num_agents": 3,
+  "loss_type": "global_interaction",
+  "strategy": "simplicial",
+  "loss_form": "multiplicative",
+  "alpha": 1.0,
+  "temperature": 1.0,
+
+  "epochs": 20,
+  "batch_size": 128,
+  "optimizer": "sgd",
+  "lr": 0.01,
+  "weight_decay": 0.0005,
+  "wd_exclude_norm_bias": true,
+  "optimizer_kwargs": null,
+  "warmup_epochs": 1,
+  "augment": true,
+  "per_agent_views": false,
+
+  "val_size": 5000,
+  "train_subset": null,
+  "seeds": [0],
+
+  "search_space": {
+    "lr": {"type": "float", "low": 0.0001, "high": 0.3, "log": true},
+    "weight_decay": {"type": "float", "low": 0.00001, "high": 0.01, "log": true},
+    "alpha": {"type": "float", "low": 0.0, "high": 50.0},
+    "optimizer": {"type": "categorical", "choices": ["sgd", "adam", "adamw"]}
+  },
+  "n_trials": 30,
+  "timeout_hours": null,
+  "metric": "val_accuracy",
+  "sampler": "tpe",
+  "pruner": "median",
+  "pruner_warmup_epochs": 3,
+  "study_seed": 0,
+
+  "precision": "float32",
+  "jit": "auto",
+  "out_dir": "results"
+}

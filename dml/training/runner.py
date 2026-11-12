@@ -113,6 +113,7 @@ def run_multi_experiment(
     eval_on: str = "final",
     csv_log: Optional[str] = None,
     callbacks: Optional[list] = None,
+    evaluate_test: bool = True,
     verbose: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -133,6 +134,8 @@ def run_multi_experiment(
         eval_on: "final" (poids de la dernière époque) ou "best" (meilleure val_accuracy,
             nécessite checkpoint_dir et un ensemble de validation).
         csv_log: fichier CSV de l'historique par époque (CSVLogger Keras).
+        evaluate_test: False = ne touche pas au test (recherche d'hyperparamètres) ; renvoie
+            alors seulement l'historique et les infos de validation.
         Les autres arguments sont ceux de MultiAgentModel.compile.
 
     Returns:
@@ -211,6 +214,15 @@ def run_multi_experiment(
             evaluated_on = "best"
         else:
             log.warning("eval_on='best' sans checkpoint_dir ni validation : évaluation sur les poids finaux.")
+
+    if not evaluate_test:
+        return {
+            "archs": model.archs,
+            "num_agents": num_agents,
+            "history": {k: [float(v) for v in vals] for k, vals in history.items()},
+            "best_epoch": ckpt.best_epoch if ckpt is not None else None,
+            "best_val_accuracy": ckpt.best if ckpt is not None else None,
+        }
 
     ev = evaluate_detailed(model, data["x_test"], data["y_test"])
     agent_accs = [a["accuracy"] for a in ev["agents"]]
