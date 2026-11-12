@@ -1,28 +1,28 @@
 {
   "name": "alpha_sweep",
   "dataset": "cifar10",
-
   "arch": "resnet20",
-  "num_agents": 3,
+  "num_agents": 5,
   "loss_type": "global_interaction",
   "strategy": "simplicial",
+  "loss_form": "multiplicative",
   "alphas": [0, 0.5, 1, 10, 50, 100],
   "temperature": 1.0,
-
-  "epochs": 10,
+  "epochs": 200,
   "batch_size": 128,
   "optimizer": "sgd",
-  "lr": 0.001,
+  "lr": 0.01,
   "weight_decay": 0.0005,
+  "wd_exclude_norm_bias": true,
   "optimizer_kwargs": null,
   "warmup_epochs": 5,
   "augment": true,
   "per_agent_views": false,
-
-  "val_size": 10000,
+  "val_size": 5000,
   "train_subset": null,
   "seeds": [0, 1, 2],
-
+  "eval_on": "final",
+  "checkpoint_every": 1,
   "precision": "float32",
   "jit": "auto",
   "out_dir": "results"

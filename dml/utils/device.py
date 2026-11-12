@@ -10,10 +10,13 @@ Le code principal des scripts tourne dans l'environnement du GPU :
     with tf.device(default_device()):
         main()
 """
+import logging
 import os
 from typing import Optional
 
 import tensorflow as tf
+
+log = logging.getLogger(__name__)
 
 
 def configure_device(force_cpu: bool = False, precision: Optional[str] = None, verbose: bool = True) -> str:
@@ -50,16 +53,16 @@ def configure_device(force_cpu: bool = False, precision: Optional[str] = None, v
     if verbose:
         if device == "gpu":
             names = [tf.config.experimental.get_device_details(g).get("device_name", g.name) for g in gpus]
-            print(f"[device] GPU : {', '.join(names)} | précision : {tf.keras.mixed_precision.global_policy().name}")
+            log.info(f"[device] GPU : {', '.join(names)} | précision : {tf.keras.mixed_precision.global_policy().name}")
         else:
             reason = "forcé" if force_cpu else "aucun GPU visible par TensorFlow"
-            print(f"[device] CPU ({reason}, {os.cpu_count()} cœurs)")
+            log.info(f"[device] CPU ({reason}, {os.cpu_count()} cœurs)")
             if not force_cpu:
                 # Indices pour comprendre pourquoi TensorFlow ne voit pas le GPU
-                print(f"[device] TensorFlow {tf.__version__} compilé avec CUDA : {tf.test.is_built_with_cuda()} | "
+                log.info(f"[device] TensorFlow {tf.__version__} compilé avec CUDA : {tf.test.is_built_with_cuda()} | "
                       f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '(non défini)')}")
                 if os.name == "nt":
-                    print("[device] Sous Windows, TensorFlow >= 2.11 n'utilise pas le GPU nativement : passer par WSL2.")
+                    log.info("[device] Sous Windows, TensorFlow >= 2.11 n'utilise pas le GPU nativement : passer par WSL2.")
     return device
 
 

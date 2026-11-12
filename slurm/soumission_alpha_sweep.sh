@@ -2,8 +2,7 @@
 #SBATCH --job-name=alpha_sweep
 #SBATCH --partition=batch
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --mem=128G
 #SBATCH --time=0-23:59:00
 #SBATCH --array=0-17
 #SBATCH --output=Logs/alpha_sweep_%A_%a.out
@@ -18,14 +17,14 @@
 # Grille : 6 alphas x 3 graines = 18 jobs  ->  --array=0-17
 # (si tu changes ALPHAS ou SEEDS : --array=0-(N_ALPHAS*N_SEEDS - 1))
 #
-# Lancement, depuis le dossier du code (dml_v2) :
-#   sbatch soumission_alpha_sweep.sh
+# Lancement, depuis la racine du dépôt (là où sont dml/, configs/, slurm/) :
+#   sbatch slurm/soumission_alpha_sweep.sh
 #
 # Sorties : results/$CAMPAIGN/jobs/a<alpha>_s<graine>/{config.json,results.json,probs/}
-# Puis : python merge_sweep.py results/$CAMPAIGN   (rassemble tout pour le notebook)
+# Puis : python -m experiments.merge_sweep results/$CAMPAIGN   (rassemble tout pour le notebook)
 #
-# Relancer un job qui a planté : il reprend là où il s'était arrêté.
-#   sbatch --array=7 soumission_alpha_sweep.sh
+# Relancer un job qui a planté ou a été coupé : il reprend à sa dernière époque sauvegardée.
+#   sbatch --array=7 slurm/soumission_alpha_sweep.sh
 # Nouvelle campagne (sans écraser l'ancienne) : changer CAMPAIGN ci-dessous.
 # =============================================================================
 
@@ -57,7 +56,7 @@ SEED=${SEEDS[$((SLURM_ARRAY_TASK_ID / N_ALPHAS))]}
 RUN_DIR="results/${CAMPAIGN}/jobs/a${ALPHA}_s${SEED}"
 
 # -----------------------------------------------------------------------------
-# Environnement : modules du cluster (TensorFlow 2.15 + CUDA, GPU déjà configuré)
+# Environnement : exactement les modules de soumission_experiment_collab.sh (GPU testé)
 # -----------------------------------------------------------------------------
 module --force purge
 ml releases/2023a
@@ -67,11 +66,16 @@ ml Python/3.11.3-GCCcore-12.3.0
 ml SciPy-bundle/2023.07-gfbf-2023a
 ml TensorFlow/2.15.1-foss-2023a-CUDA-12.1.1
 ml matplotlib/3.7.2
+ml Seaborn/0.13.2-gfbf-2023a
+ml scikit-learn/1.3.1-gfbf-2023a
 ml tqdm
 
-cd "$SLURM_SUBMIT_DIR"
+# Racine du dépôt : dossier de lancement de sbatch (ou son parent si lancé depuis slurm/)
+ROOT="$SLURM_SUBMIT_DIR"
+[ -d "$ROOT/dml" ] || ROOT="$(dirname "$ROOT")"
+[ -d "$ROOT/dml" ] || { echo "Lancer sbatch depuis la racine du dépôt (dossier qui contient dml/)"; exit 1; }
+cd "$ROOT"
 export TF_GPU_ALLOCATOR=cuda_malloc_async
-export TF_CPP_MIN_LOG_LEVEL=2
 
 echo "=========================================="
 echo "SWEEP alpha | campagne $CAMPAIGN"
@@ -83,7 +87,8 @@ echo "Sortie: $RUN_DIR"
 nvidia-smi --query-gpu=name,memory.free --format=csv,noheader 2>/dev/null || echo "No GPU"
 echo "=========================================="
 
-python run_alpha_sweep.py --config "$CONFIG" --alphas "$ALPHA" --seeds "$SEED" \
+
+python -m experiments.alpha_sweep --config "$CONFIG" --alphas "$ALPHA" --seeds "$SEED" \
     --run-dir "$RUN_DIR" --verbose 2
 exit_code=$?
 

@@ -58,15 +58,15 @@ def mobilenet_v2(inputs, width: float = 1.0):
 
 
 @register_model("mobilenetv1")
-def mobilenetv1(inputs):
-    return mobilenet_v1(inputs, width=1.0)
+def mobilenetv1(inputs, width=1.0):
+    return mobilenet_v1(inputs, width=width)
 
 
 @register_model("mobilenetv2")
-def mobilenetv2(inputs):
-    return mobilenet_v2(inputs, width=1.0)
+def mobilenetv2(inputs, width=1.0):
+    return mobilenet_v2(inputs, width=width)
 
 
 @register_model("mobilenetv2_0.5")
-def mobilenetv2_half(inputs):
-    return mobilenet_v2(inputs, width=0.5)
+def mobilenetv2_half(inputs, width=1.0):
+    return mobilenet_v2(inputs, width=0.5 * width)

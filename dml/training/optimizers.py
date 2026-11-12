@@ -86,6 +86,19 @@ def choix_optimiseur(
 # OPTIMISEURS DES AGENTS
 # =============================================================================
 
+# Variables exclues du weight decay (motifs cherchés dans le nom de la variable) :
+# paramètres de BatchNorm (gamma, beta) et biais, comme dans les recettes ResNet modernes.
+DEFAULT_WD_EXCLUDE = ("gamma", "beta", "bias")
+
+
+def exclude_norm_and_bias(optimizer: tf.keras.optimizers.Optimizer,
+                          patterns: Sequence[str] = DEFAULT_WD_EXCLUDE) -> tf.keras.optimizers.Optimizer:
+    """Exclut du weight decay les variables dont le nom contient un des motifs (avant le 1er pas)."""
+    if patterns and hasattr(optimizer, "exclude_from_weight_decay"):
+        optimizer.exclude_from_weight_decay(var_names=list(patterns))
+    return optimizer
+
+
 def make_lr_schedule(lr: float, epochs: int, steps_per_epoch: int, warmup_epochs: int = 5):
     """Warmup linéaire puis décroissance cosinus jusqu'à 0."""
     total_steps = epochs * steps_per_epoch
@@ -117,6 +130,7 @@ def build_agent_optimizers(
     steps_per_epoch: int = 390,
     warmup_epochs: int = 5,
     optimizer_kwargs: Union[Dict[str, Any], Sequence[Dict[str, Any]], None] = None,
+    wd_exclude: Optional[Sequence[str]] = DEFAULT_WD_EXCLUDE,
 ) -> List[tf.keras.optimizers.Optimizer]:
     """
     Un optimiseur neuf par agent, chacun avec son propre schedule warmup + cosinus.
@@ -124,13 +138,16 @@ def build_agent_optimizers(
     optimizer, lr, weight_decay et optimizer_kwargs acceptent soit une valeur commune,
     soit une liste (une valeur par agent). Le weight decay est porté par l'optimiseur,
     car le train_step du MultiAgentModel n'ajoute pas les régularisations des couches.
+    wd_exclude : motifs de noms de variables sans weight decay (défaut : BatchNorm et biais) ;
+    None ou () = weight decay sur toutes les variables (ancien comportement).
     """
     names = _per_agent(optimizer, num_agents, "optimizer")
     lrs = _per_agent(lr, num_agents, "lr")
     wds = _per_agent(weight_decay, num_agents, "weight_decay")
     extras = _per_agent(optimizer_kwargs or {}, num_agents, "optimizer_kwargs")
-    return [
+    opts = [
         choix_optimiseur(name, learning_rate=make_lr_schedule(lr_k, epochs, steps_per_epoch, warmup_epochs),
                          weight_decay=wd_k, **extra)
         for name, lr_k, wd_k, extra in zip(names, lrs, wds, extras)
     ]
+    return [exclude_norm_and_bias(opt, wd_exclude or ()) for opt in opts]

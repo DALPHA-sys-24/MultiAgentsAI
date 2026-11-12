@@ -3,10 +3,10 @@ Rassemble les jobs d'un sweep de alpha lancé sur le cluster (un job par couple 
 
 Chaque job écrit dans <campagne>/jobs/a<alpha>_s<graine>/ ; ce script crée dans <campagne>/
 un config.json, un results.json et un dossier probs/ au même format qu'un sweep lancé
-d'un seul bloc, lisibles directement par resultats_sweep.ipynb.
+d'un seul bloc, lisibles directement par notebooks/resultats_sweep.ipynb.
 
 Exemple :
-    python merge_sweep.py results/alpha_sweep_cifar10
+    python -m experiments.merge_sweep results/alpha_sweep_cifar10
 """
 import argparse
 import glob
@@ -14,7 +14,11 @@ import json
 import os
 import shutil
 
-from run_alpha_sweep import STRATEGY_NO_INTERACTION, print_table, summary_by_alpha
+from dml.utils.config import STRATEGY_NO_INTERACTION
+from dml.utils.log import setup_logging
+from dml.evaluation.reporting import print_sweep_table, summary_by_alpha, write_json
+
+log = setup_logging()
 
 
 def main():
@@ -42,6 +46,10 @@ def main():
                 config = json.load(f)
         for npy in glob.glob(os.path.join(d, "probs", "*.npy")):
             shutil.copy2(npy, probs_dir)
+        # Historiques par époque (.csv) des jobs, pour le notebook
+        for csv in glob.glob(os.path.join(d, "history", "*.csv")):
+            os.makedirs(os.path.join(args.campaign_dir, "history"), exist_ok=True)
+            shutil.copy2(csv, os.path.join(args.campaign_dir, "history"))
 
     runs = [runs[key] for key in sorted(runs)]
     alphas = sorted({r["alpha"] for r in runs})
@@ -51,16 +59,16 @@ def main():
 
     with open(os.path.join(args.campaign_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
-    with open(os.path.join(args.campaign_dir, "results.json"), "w") as f:
-        json.dump({"experiment": "alpha_sweep", "summary": summary, "runs": runs,
-                   "agent_params": agent_params, "train_time_s": train_time}, f, indent=2)
+    write_json(os.path.join(args.campaign_dir, "results.json"),
+               {"experiment": "alpha_sweep", "summary": summary, "runs": runs,
+                "agent_params": agent_params, "train_time_s": train_time})
 
-    print(f"{len(job_dirs)} job(s), {len(runs)} run(s) rassemblés")
+    log.info("%d job(s), %d run(s) rassemblés", len(job_dirs), len(runs))
     missing = [(a, s) for a in alphas for s in seeds if (float(a), s) not in {(float(r['alpha']), r['seed']) for r in runs}]
     if missing:
-        print("Couples (alpha, graine) manquants : " + ", ".join(f"({a:g}, {s})" for a, s in missing))
-    print_table(summary, config)
-    print(f"Résultats : {args.campaign_dir}")
+        log.warning("Couples (alpha, graine) manquants : " + ", ".join(f"({a:g}, {s})" for a, s in missing))
+    print_sweep_table(summary, config["num_agents"], config["arch"], config["loss_type"])
+    log.info("Résultats : %s", args.campaign_dir)
 
 
 if __name__ == "__main__":

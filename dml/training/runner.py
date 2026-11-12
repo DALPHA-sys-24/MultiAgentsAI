@@ -1,6 +1,10 @@
 """
-Fonctions d'expérience et de benchmark pour le système multi-agents
-avec des agents ResNet / MobileNet.
+Fonctions d'expérience pour le système multi-agents (agents ResNet / MobileNet).
+
+- run_multi_experiment : entraîne et évalue un MultiAgentModel (reprise sur checkpoint possible) ;
+- run_single_reference : un agent seul, même boucle d'entraînement ;
+- count_trainable_params / match_width : taille des agents ;
+- benchmark_architectures : référence vs multi-agents sur plusieurs architectures.
 
 Le benchmark compare, pour chaque architecture :
     - une référence : l'agent entraîné seul (MultiAgentModel à 1 agent, donc
@@ -9,6 +13,8 @@ Le benchmark compare, pour chaque architecture :
     - un ensemble de K références indépendantes (même coût que K agents, sans interaction).
 """
 import gc
+import logging
+import os
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
@@ -16,10 +22,16 @@ import pandas as pd
 import tensorflow as tf
 from tqdm import tqdm
 
-from data import make_eval_dataset, make_train_dataset
-from models import AgentNetwork
-from multiagent import MultiAgentModel
-from optimizers import build_agent_optimizers
+from dml.training.checkpoint import TrainingCheckpoint
+from dml.data import make_eval_dataset, make_train_dataset
+from dml.evaluation.metrics import evaluate_detailed
+from dml.models import AgentNetwork
+from dml.core.multiagent import MultiAgentModel
+from dml.training.optimizers import DEFAULT_WD_EXCLUDE, build_agent_optimizers
+
+log = logging.getLogger(__name__)
+
+EVAL_ON = ("final", "best")
 
 
 # =============================================================================
@@ -68,56 +80,6 @@ def match_width(arch: str, target_params: int, input_shape, num_classes: int,
 
 
 # =============================================================================
-# ÉVALUATION DÉTAILLÉE
-# =============================================================================
-
-def expected_calibration_error(probs: np.ndarray, y: np.ndarray, n_bins: int = 15) -> float:
-    conf = probs.max(axis=-1)
-    correct = (probs.argmax(axis=-1) == y).astype(np.float64)
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    ece = 0.0
-    for lo, hi in zip(bins[:-1], bins[1:]):
-        mask = (conf > lo) & (conf <= hi)
-        if mask.any():
-            ece += mask.mean() * abs(correct[mask].mean() - conf[mask].mean())
-    return float(ece)
-
-
-def _prob_metrics(probs: np.ndarray, y: np.ndarray) -> Dict[str, float]:
-    p_true = np.clip(probs[np.arange(len(y)), y], 1e-12, 1.0)
-    return {
-        "accuracy": float((probs.argmax(axis=-1) == y).mean()),
-        "nll": float(-np.log(p_true).mean()),
-        "ece": expected_calibration_error(probs, y),
-    }
-
-
-def evaluate_detailed(model: MultiAgentModel, x: np.ndarray, y: np.ndarray,
-                      batch_size: int = 256) -> Dict[str, Any]:
-    """
-    Accuracy, NLL et ECE de chaque agent, du consensus configuré et de la
-    moyenne simple des agents.
-
-    Returns:
-        dict avec 'agents' (liste de dicts), 'consensus' (dict), 'mean_ensemble' (dict),
-        et 'agents_probabilities' (N, K, C) pour construire des ensembles a posteriori.
-    """
-    res = model.predict(x, batch_size=batch_size, verbose=0,
-                        return_agents=True, return_probabilities=True)
-    agent_probs = np.asarray(res["agents_probabilities"], dtype=np.float64)
-    out = {
-        "agents": [_prob_metrics(agent_probs[:, k], y) for k in range(agent_probs.shape[1])],
-        "mean_ensemble": _prob_metrics(agent_probs.mean(axis=1), y),
-        "agents_probabilities": agent_probs.astype(np.float32),
-    }
-    if "consensus_probabilities" in res:
-        out["consensus"] = _prob_metrics(np.asarray(res["consensus_probabilities"], np.float64), y)
-    else:  # stratégies à labels durs (vote, majority, k_fold)
-        out["consensus"] = {"accuracy": float((np.asarray(res["consensus"]) == y).mean())}
-    return out
-
-
-# =============================================================================
 # EXPÉRIENCES UNITAIRES
 # =============================================================================
 
@@ -131,11 +93,14 @@ def run_multi_experiment(
     strategy: str = "simplicial",
     alpha: float = 1.0,
     temperature: float = 1.0,
+    form: str = "multiplicative",
+    single_agent_loss: str = "ce",
     epochs: int = 200,
     batch_size: int = 128,
     optimizer: Union[str, List[str]] = "sgd",
     lr: Union[float, List[float]] = 0.1,
     weight_decay: Union[float, List[float]] = 5e-4,
+    wd_exclude: Optional[Sequence[str]] = DEFAULT_WD_EXCLUDE,
     warmup_epochs: int = 5,
     optimizer_kwargs: Union[Dict[str, Any], List[Dict[str, Any]], None] = None,
     augment: bool = True,
@@ -143,6 +108,10 @@ def run_multi_experiment(
     dropout_rate: float = 0.0,
     seed: Optional[int] = None,
     jit_compile: Union[bool, str] = "auto",
+    checkpoint_dir: Optional[str] = None,
+    checkpoint_every: int = 1,
+    eval_on: str = "final",
+    csv_log: Optional[str] = None,
     callbacks: Optional[list] = None,
     verbose: int = 0,
 ) -> Dict[str, Any]:
@@ -156,14 +125,23 @@ def run_multi_experiment(
         optimizer: Nom d'optimiseur (voir optimizers.available_optimizers()), le même
             pour tous les agents, ou liste d'un nom par agent. lr, weight_decay et
             optimizer_kwargs acceptent aussi une valeur commune ou une liste par agent.
+        wd_exclude: motifs de noms de variables sans weight decay (défaut BatchNorm et biais).
         per_agent_views: True = chaque agent voit une augmentation différente du même
             exemple ; False = même image pour tous (DML classique).
+        checkpoint_dir: dossier de sauvegarde (voir checkpoint.py). S'il contient un état,
+            l'entraînement reprend là où il s'était arrêté. None = pas de sauvegarde.
+        eval_on: "final" (poids de la dernière époque) ou "best" (meilleure val_accuracy,
+            nécessite checkpoint_dir et un ensemble de validation).
+        csv_log: fichier CSV de l'historique par époque (CSVLogger Keras).
         Les autres arguments sont ceux de MultiAgentModel.compile.
 
     Returns:
         dict avec 'accuracy_consensus', 'accuracy_agents' (liste), 'accuracy_agents_median',
-        'accuracy_mean_ensemble', les NLL/ECE, 'history' (dict Keras) et 'test_probabilities'.
+        'accuracy_mean_ensemble', les NLL/ECE, 'history' (dict), 'best_epoch',
+        'evaluated_on' et 'test_probabilities'.
     """
+    if eval_on not in EVAL_ON:
+        raise ValueError(f"eval_on inconnu : {eval_on}. Choix : {EVAL_ON}")
     if seed is not None:
         tf.keras.utils.set_random_seed(seed)
 
@@ -192,16 +170,47 @@ def run_multi_experiment(
         optimizers_config=build_agent_optimizers(
             optimizer, num_agents, lr=lr, weight_decay=weight_decay, epochs=epochs,
             steps_per_epoch=steps_per_epoch, warmup_epochs=warmup_epochs,
-            optimizer_kwargs=optimizer_kwargs,
+            optimizer_kwargs=optimizer_kwargs, wd_exclude=wd_exclude,
         ),
         loss_type=loss_type,
         strategy=strategy,
         alpha=alpha,
         temperature=temperature,
+        form=form,
+        single_agent_loss=single_agent_loss,
+        eval_seed=seed or 0,
         jit_compile=jit_compile,
     )
-    history = model.fit(train_ds, validation_data=val_ds, epochs=epochs,
-                        callbacks=callbacks, verbose=verbose)
+    # Construit tous les poids (backbones puis têtes) avant une éventuelle reprise
+    image_shape = tuple(data["x_train"].shape[1:])
+    model(tf.zeros((1, num_agents) + image_shape if per_agent_views else (1,) + image_shape), training=False)
+
+    callbacks = list(callbacks or [])
+    ckpt, initial_epoch = None, 0
+    if checkpoint_dir is not None:
+        ckpt = TrainingCheckpoint(checkpoint_dir, monitor="val_accuracy", every=checkpoint_every)
+        initial_epoch = ckpt.restore(model)
+        callbacks.append(ckpt)
+    if csv_log is not None:
+        os.makedirs(os.path.dirname(os.path.abspath(csv_log)), exist_ok=True)
+        callbacks.append(tf.keras.callbacks.CSVLogger(csv_log, append=initial_epoch > 0))
+    callbacks.append(tf.keras.callbacks.TerminateOnNaN())
+
+    history = {}
+    if initial_epoch < epochs:
+        h = model.fit(train_ds, validation_data=val_ds, epochs=epochs, initial_epoch=initial_epoch,
+                      callbacks=callbacks, verbose=verbose)
+        history = h.history
+    if ckpt is not None:
+        history = ckpt.history  # historique complet, y compris les époques d'avant une reprise
+        ckpt.save_final(model)
+
+    evaluated_on = "final"
+    if eval_on == "best":
+        if ckpt is not None and ckpt.load_best(model):
+            evaluated_on = "best"
+        else:
+            log.warning("eval_on='best' sans checkpoint_dir ni validation : évaluation sur les poids finaux.")
 
     ev = evaluate_detailed(model, data["x_test"], data["y_test"])
     agent_accs = [a["accuracy"] for a in ev["agents"]]
@@ -216,7 +225,10 @@ def run_multi_experiment(
         "ece_agents": [a["ece"] for a in ev["agents"]],
         "nll_consensus": ev["consensus"].get("nll"),
         "ece_consensus": ev["consensus"].get("ece"),
-        "history": {k: [float(v) for v in vals] for k, vals in history.history.items()},
+        "history": {k: [float(v) for v in vals] for k, vals in history.items()},
+        "evaluated_on": evaluated_on,
+        "best_epoch": ckpt.best_epoch if ckpt is not None else None,
+        "best_val_accuracy": ckpt.best if ckpt is not None else None,
         "test_probabilities": ev["agents_probabilities"],
     }
     return result
@@ -224,10 +236,10 @@ def run_multi_experiment(
 
 def run_single_reference(data: Dict[str, Any], *, arch: str, **kwargs) -> Dict[str, Any]:
     """
-    Référence : un seul agent entraîné avec la cross-entropy classique.
+    Référence : un seul agent, entraîné avec la même boucle que le système multi-agents.
 
-    Toutes les losses du MultiAgentModel se réduisent à la CE pour K = 1, donc la
-    référence partage exactement la boucle d'entraînement du système multi-agents.
+    Sa loss est la cross-entropy (single_agent_loss="ce", défaut) ou la même forme que
+    celle des agents avec I_k = 0 (single_agent_loss="form", soit L_k² en multiplicatif).
     """
     kwargs.pop("num_agents", None)
     res = run_multi_experiment(data, archs=[arch], **kwargs)
@@ -237,6 +249,8 @@ def run_single_reference(data: Dict[str, Any], *, arch: str, **kwargs) -> Dict[s
         "nll_reference": res["nll_agents"][0],
         "ece_reference": res["ece_agents"][0],
         "history": res["history"],
+        "evaluated_on": res["evaluated_on"],
+        "best_epoch": res["best_epoch"],
         "test_probabilities": res["test_probabilities"][:, 0],
     }
 
@@ -245,7 +259,8 @@ def run_single_reference(data: Dict[str, Any], *, arch: str, **kwargs) -> Dict[s
 # BENCHMARK
 # =============================================================================
 
-def _cleanup():
+def cleanup():
+    """Libère les modèles TensorFlow entre deux runs (sinon la RAM grossit à chaque run)."""
     tf.keras.backend.clear_session()
     gc.collect()
 
@@ -291,7 +306,7 @@ def benchmark_architectures(
             res.pop("history")
             ref_records.append({"run": run, **res})
             pbar.update(1)
-            _cleanup()
+            cleanup()
 
     multi_records = []
     for archs in configs:
@@ -303,7 +318,7 @@ def benchmark_architectures(
             res.pop("history")
             multi_records.append({"config": name, "run": run, **res})
             pbar.update(1)
-            _cleanup()
+            cleanup()
     pbar.close()
 
     df_ref = pd.DataFrame(ref_records)

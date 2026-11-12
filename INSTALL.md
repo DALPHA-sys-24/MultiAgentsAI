@@ -1,6 +1,6 @@
 # Installation des environnements
 
-Python 3.10 à 3.13 (3.12 conseillé). Toutes les commandes se lancent depuis le dossier du code.
+Python 3.10 à 3.13 (3.12 conseillé). Toutes les commandes se lancent depuis la racine du dépôt (le dossier qui contient `dml/`).
 
 ## 1. CPU sous Windows (PowerShell)
 
@@ -10,7 +10,7 @@ py -3.12 -m venv .venv-cpu
 .\.venv-cpu\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements_cpu.txt
-python run_experiment.py --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --seeds 0
+python -m experiments.collab_vs_big --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --seeds 0
 ```
 
 Si PowerShell refuse d'activer l'environnement : `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, une seule fois.
@@ -38,7 +38,7 @@ pip install --upgrade pip
 cd /mnt/c/Users/jketchak/Documents/DALPHAcommunity/UNAMUR/EUREKA/btwg_ml/MultiAgentsAI
 pip install -r requirements_gpu.txt
 python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
-python run_experiment.py --train-subset 2000 --epochs 2 --warmup-epochs 1 --seeds 0
+python -m experiments.collab_vs_big --train-subset 2000 --epochs 2 --warmup-epochs 1 --seeds 0
 ```
 
 La ligne `[device]` au démarrage doit afficher le GPU. À chaque nouvelle session : `source ~/venvs/dml-gpu/bin/activate`.
@@ -57,7 +57,7 @@ python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU')
 Les nœuds de calcul n'ont souvent pas internet : télécharger les données une fois depuis le nœud de connexion :
 
 ```bash
-python -c "from data import load_dataset; load_dataset('cifar10'); load_dataset('fashion_mnist')"
+python -c "from dml.data import load_dataset; load_dataset('cifar10'); load_dataset('fashion_mnist')"
 ```
 
 ## Avec conda (au lieu de venv)

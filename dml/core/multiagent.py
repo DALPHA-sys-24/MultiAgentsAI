@@ -1,35 +1,31 @@
 """
 Multi-Agent Model pour la classification collaborative d'images.
 
-Structure:
-- loss_type: "leave_one_out", "global_interaction", "vote_random", "majority_hard", "majority_loo"
-- strategy: "vote", "majority", "simplicial", "k_fold"
+- loss_type : une loss enregistrée dans losses.py ("leave_one_out", "global_interaction",
+  "vote_random", "majority_hard", "majority_loo", ...)
+- strategy  : une stratégie enregistrée dans consensus.py ("vote", "majority",
+  "simplicial", "k_fold", ...)
+
+Les losses et les consensus sont des fonctions enregistrées par leur nom : en ajouter
+une ne demande pas de modifier cette classe (voir losses.py et consensus.py).
 
 Les callbacks (AgentHistoryCallback, ConvergenceTracker) sont dans callbacks.py ;
 ils restent importables depuis ce module.
 """
-from typing import Callable, Dict, List, Union, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
 import tensorflow as tf
 
-from callbacks import AgentHistoryCallback, ConvergenceTracker  # noqa: F401  (compatibilité)
-from models import AgentNetwork
-from optimizers import choix_optimiseur
+from dml.core import consensus as cons_lib
+from dml.core import losses as loss_lib
+from dml.core.callbacks import AgentHistoryCallback, ConvergenceTracker  # noqa: F401  (compatibilité)
+from dml.models import AgentNetwork
+from dml.training.optimizers import choix_optimiseur
 
-# Nom du loss_type -> nom de la méthode qui le calcule.
-# Ajouter une loss : écrire une méthode compute_loss_<nom>(outputs, y, log_outputs) et l'ajouter ici.
-LOSS_FUNCTIONS = {
-    "leave_one_out": "compute_loss_leave_one_out",
-    "global_interaction": "compute_loss_global_interaction",
-    "vote_random": "compute_loss_vote_random",
-    "majority_hard": "compute_loss_majority_hard",
-    "majority_loo": "compute_loss_majority_loo",
-}
-STRATEGIES = ("vote", "majority", "simplicial", "k_fold")
-
-_EPS = 1e-7  # même seuil que Keras : log-probabilités bornées à log(_EPS) dans les CE
-_LOG_EPS = float(np.log(_EPS))
+# Registres (nom -> fonction). Itérer dessus donne les noms disponibles.
+LOSS_FUNCTIONS = loss_lib._LOSSES
+STRATEGIES = tuple(cons_lib.available_strategies())
 
 
 def _make_optimizer(cfg):
@@ -41,22 +37,39 @@ def _make_optimizer(cfg):
     return tf.keras.optimizers.get(cfg)
 
 
+class _EvalRNG:
+    """
+    Générateur aléatoire de l'évaluation, remis à zéro au début de chaque evaluate/predict :
+    la stratégie "vote" donne alors la même accuracy à chaque évaluation.
+
+    Objet Python simple (pas un attribut tf.Variable du modèle), pour que son état ne
+    soit pas compté dans les poids du modèle.
+    """
+
+    def __init__(self, seed: int):
+        self.seed = seed
+        self.gen = tf.random.Generator.from_seed(seed)
+
+    def reset(self):
+        self.gen.reset_from_seed(self.seed)
+
+    def randint(self, shape, maxval):
+        return self.gen.uniform(shape, minval=0, maxval=maxval, dtype=tf.int32)
+
+
 class MultiAgentModel(tf.keras.Model):
     """
     Modele multi-agents pour la classification collaborative.
 
-    Loss types (L_k = CE(y, y^k)), toutes de la forme L_k * (L_k + alpha * I_k) :
+    Loss types (L_k = CE(y, y^k)), toutes de la forme L_k * (L_k + alpha * I_k)
+    (ou L_k + alpha * I_k avec form="additive") :
         - "leave_one_out": I_k = (1-w_k) * CE(y^cons_{-k}, y^k)
         - "global_interaction": I_k = CE(y^cons, y^k) + CE(y, y^cons)
         - "vote_random": I_k = (1-w_k) * CE(y^{vote}, y^k)
         - "majority_hard": I_k = (1-w_k) * CE(y^{majority}, y^k)
         - "majority_loo":  I_k = (1-w_k) * CE(y^{majority_{-k}}, y^k)
-    Avec un seul agent, toutes se réduisent à la cross-entropy L_k.
-
-    Les cross-entropies sont calculées à partir des log-probabilités (log_softmax des
-    logits), bornées à log(1e-7) comme le fait Keras sur les probabilités. Cette borne
-    est nécessaire : sans elle, la forme multiplicative L_k * (L_k + ...) donne des
-    gradients énormes sur les exemples très mal classés et l'entraînement diverge.
+    Avec un seul agent, la loss est la cross-entropy (single_agent_loss="ce") ou la
+    même forme avec I_k = 0 (single_agent_loss="form").
 
     Strategies:
         - "vote": Selection aleatoire d'un agent
@@ -110,6 +123,9 @@ class MultiAgentModel(tf.keras.Model):
         self._strategy: Optional[str] = None
         self._alpha: Optional[float] = None
         self._temperature: Optional[float] = None
+        self._form: str = "multiplicative"
+        self._single_agent_loss: str = "ce"
+        self._eval_rng: Optional[_EvalRNG] = None
 
         # Trackers internes Keras
         self._loss_tracker = tf.keras.metrics.Mean(name="loss")
@@ -160,6 +176,9 @@ class MultiAgentModel(tf.keras.Model):
         strategy: str = "simplicial",
         alpha: float = 1.0,
         temperature: float = 1.0,
+        form: str = "multiplicative",
+        single_agent_loss: str = "ce",
+        eval_seed: int = 0,
         **kwargs
     ):
         """
@@ -173,21 +192,30 @@ class MultiAgentModel(tf.keras.Model):
                   une fois par agent).
                 Ne pas passer une instance unique : elle serait partagée par tous les agents.
                 Avec schedule et weight decay : optimizers.build_agent_optimizers.
-            loss_type: "leave_one_out", "global_interaction", "vote_random", "majority_hard", "majority_loo"
-            strategy: "vote", "majority", "simplicial", "k_fold"
+            loss_type: nom d'une loss de losses.py.
+            strategy: nom d'une stratégie de consensus.py.
             alpha: Poids du terme d'interaction I_k, pour toutes les losses.
             temperature: Température tau pour le softmax des w_k.
+            form: "multiplicative" (L_k * (L_k + alpha I_k), défaut) ou "additive" (L_k + alpha I_k).
+            single_agent_loss: loss quand K = 1 : "ce" (défaut) ou "form" (même forme, I_k = 0).
+            eval_seed: graine du tirage aléatoire de la stratégie "vote" à l'évaluation.
             kwargs: Transmis à Model.compile (ex. jit_compile=True pour XLA).
         """
-        if loss_type not in LOSS_FUNCTIONS:
-            raise ValueError(f"Unknown loss_type: {loss_type}. Choix : {list(LOSS_FUNCTIONS)}")
-        if strategy not in STRATEGIES:
-            raise ValueError(f"Unknown strategy: {strategy}. Choix : {list(STRATEGIES)}")
+        loss_lib.get_loss(loss_type)          # erreur claire si le nom est inconnu
+        cons_lib.get_strategy(strategy)
+        if form not in loss_lib.FORMS:
+            raise ValueError(f"form inconnue : {form}. Choix : {loss_lib.FORMS}")
+        if single_agent_loss not in loss_lib.SINGLE_AGENT_LOSSES:
+            raise ValueError(f"single_agent_loss inconnue : {single_agent_loss}. "
+                             f"Choix : {loss_lib.SINGLE_AGENT_LOSSES}")
 
         self._loss_type = loss_type
         self._strategy = strategy
         self._alpha = alpha
         self._temperature = temperature
+        self._form = form
+        self._single_agent_loss = single_agent_loss
+        self._eval_rng = _EvalRNG(eval_seed)
 
         if isinstance(optimizers_config, (list, tuple)):
             if len(optimizers_config) != self._num_agents:
@@ -201,190 +229,102 @@ class MultiAgentModel(tf.keras.Model):
         super().compile(**kwargs)
 
     # =========================================================================
-    # CONFIDENCE WEIGHTS
+    # CONTEXTES
     # =========================================================================
 
-    @staticmethod
-    def _log_probs(outputs, log_outputs=None):
-        """
-        Log-probabilités utilisées dans les cross-entropies, bornées à log(1e-7).
+    def _randint(self, training: bool):
+        """Tirage aléatoire : libre à l'entraînement, reproductible à l'évaluation."""
+        if training or self._eval_rng is None:
+            return None
+        return self._eval_rng.randint
 
-        Identique à la CE Keras sur probabilités tronquées (valeur et gradient), mais
-        calculé depuis les logits quand ils sont disponibles.
-        """
-        if log_outputs is None:
-            return tf.math.log(tf.clip_by_value(tf.cast(outputs, tf.float32), _EPS, 1.0))
-        return tf.maximum(tf.cast(log_outputs, tf.float32), _LOG_EPS)
+    def _consensus_context(self, training: bool = False) -> cons_lib.ConsensusContext:
+        return cons_lib.ConsensusContext(
+            num_agents=self._num_agents, num_classes=self._num_classes,
+            temperature=self._temperature, randint=self._randint(training),
+        )
+
+    def _loss_context(self, batch_size, training: bool = False) -> loss_lib.LossContext:
+        ctx = loss_lib.LossContext(
+            num_agents=self._num_agents, num_classes=self._num_classes,
+            temperature=self._temperature, randint=self._randint(training),
+            alpha=self._alpha, form=self._form,
+        )
+        if self._loss_type == "vote_random":
+            ctx.vote_idx = ctx.random_agent(batch_size)  # un seul tirage partagé par les K losses
+        return ctx
+
+    # =========================================================================
+    # CONFIDENCE WEIGHTS / CONSENSUS (raccourcis vers consensus.py)
+    # =========================================================================
 
     def compute_log_confidence_weights(self, outputs, log_outputs=None):
         """log w_k = log_softmax(-H_k / tau), (batch, k)."""
-        p = tf.cast(outputs, tf.float32)
-        if log_outputs is None:
-            # xlogy(p, p) = p * log(p), retourne 0 si p=0 (évite les NaN)
-            H_k = -tf.reduce_sum(tf.math.xlogy(p, p), axis=-1)
-        else:
-            H_k = -tf.reduce_sum(p * tf.cast(log_outputs, tf.float32), axis=-1)
-        return tf.nn.log_softmax(-H_k / self._temperature, axis=-1)
+        return cons_lib.log_confidence_weights(outputs, self._temperature, log_outputs)
 
     def compute_confidence_weights(self, outputs, log_outputs=None):
-        """
-        w_k = softmax(-H_k / tau)  où  H_k = entropie de y^k.
-
-        Args:
-            outputs: (batch, k, num_classes)
-            log_outputs: log-probabilités correspondantes (optionnel, plus précis).
-        Returns:
-            weights: (batch, k)
-        """
-        return tf.exp(self.compute_log_confidence_weights(outputs, log_outputs))
-
-    # =========================================================================
-    # CONSENSUS FUNCTIONS
-    # =========================================================================
+        """w_k = softmax(-H_k / tau) où H_k = entropie de y^k. (batch, k)."""
+        return cons_lib.confidence_weights(outputs, self._temperature, log_outputs)
 
     def consensus_vote(self, outputs):
-        """Selection aleatoire d'un agent pour chaque exemple du batch."""
-        preds = tf.argmax(outputs, axis=-1, output_type=tf.int32)
-        batch_size = tf.shape(preds)[0]
-        idx = tf.random.uniform([batch_size], 0, self._num_agents, dtype=tf.int32)
-        return tf.gather_nd(preds, tf.stack([tf.range(batch_size), idx], axis=1))
+        return cons_lib.vote(outputs, self._consensus_context())
 
     def consensus_majority(self, outputs):
-        """Vote majoritaire des K agents."""
-        preds = tf.argmax(outputs, axis=-1, output_type=tf.int32)
-        votes = tf.one_hot(preds, depth=self._num_classes)
-        return tf.argmax(tf.reduce_sum(votes, axis=1), axis=-1, output_type=tf.int32)
+        return cons_lib.majority_labels(outputs, self._num_classes)
 
     def consensus_simplicial(self, outputs, weights, return_proba=False):
-        """Moyenne pondérée : y^cons = sum_k w_k * y^k."""
-        proba = tf.reduce_sum(outputs * tf.expand_dims(weights, -1), axis=1)
+        proba = cons_lib.simplicial_proba(outputs, weights)
         return proba if return_proba else tf.argmax(proba, axis=-1, output_type=tf.int32)
 
     def consensus_k_fold(self, outputs, weights):
-        """Vote majoritaire sur les K consensus leave-one-out."""
-        loo = self.compute_leave_one_out_consensus(outputs, weights)
-        preds = tf.argmax(loo, axis=-1, output_type=tf.int32)
-        votes = tf.one_hot(preds, depth=self._num_classes)
-        return tf.argmax(tf.reduce_sum(votes, axis=1), axis=-1, output_type=tf.int32)
-
-    def compute_consensus(self, outputs):
-        """Dispatch vers la stratégie configurée."""
-        if self._strategy == "vote":
-            return self.consensus_vote(outputs)
-        if self._strategy == "majority":
-            return self.consensus_majority(outputs)
-        w = self.compute_confidence_weights(outputs)
-        if self._strategy == "simplicial":
-            return self.consensus_simplicial(outputs, w, return_proba=True)
-        return self.consensus_k_fold(outputs, w)
-
-    def compute_consensus_predictions(self, outputs):
-        """Retourne un tenseur de classes (batch,) pour le calcul d'accuracy."""
-        cons = self.compute_consensus(outputs)
-        return tf.argmax(cons, axis=-1, output_type=tf.int32) if len(cons.shape) == 2 else cons
+        return cons_lib.majority_labels(cons_lib.leave_one_out_consensus(outputs, weights), self._num_classes)
 
     def compute_leave_one_out_consensus(self, outputs, weights):
-        """
-        y^cons_{-k} = sum_{j≠k} w_j * y^j / sum_{j≠k} w_j
+        return cons_lib.leave_one_out_consensus(outputs, weights)
 
-        Returns: (batch, k, num_classes)
-        """
-        w_exp = tf.expand_dims(weights, -1)
-        weighted = outputs * w_exp
-        total_w = tf.reduce_sum(weighted, axis=1, keepdims=True)
-        total_s = tf.reduce_sum(weights, axis=1, keepdims=True)
-        loo_w = total_w - weighted
-        loo_s = total_s - weights
-        return tf.math.divide_no_nan(loo_w, tf.expand_dims(loo_s, -1))
+    def compute_consensus(self, outputs, training=False):
+        """Consensus de la stratégie configurée : probabilités (batch, C) ou labels (batch,)."""
+        outputs = tf.convert_to_tensor(outputs, tf.float32)
+        return cons_lib.get_strategy(self._strategy)(outputs, self._consensus_context(training))
+
+    def compute_consensus_predictions(self, outputs, training=False):
+        """Retourne un tenseur de classes (batch,) pour le calcul d'accuracy."""
+        return cons_lib.consensus_to_labels(self.compute_consensus(outputs, training))
 
     # =========================================================================
-    # LOSS FUNCTIONS
-    # Toutes renvoient une liste de K scalaires (une loss par agent). Les CE sont
-    # calculées pour tous les agents à la fois, sous forme (batch, K).
+    # LOSS FUNCTIONS (raccourcis vers losses.py)
     # =========================================================================
 
-    def _ce_labels(self, labels, log_p):
-        """CE(label, y^k) pour chaque agent. labels : (batch,) ou (batch, K). Renvoie (batch, K)."""
-        one_hot = tf.one_hot(labels, depth=self._num_classes)
-        if len(one_hot.shape) == 2:
-            one_hot = one_hot[:, None, :]
-        return -tf.reduce_sum(one_hot * log_p, axis=-1)
+    def compute_losses(self, outputs, y_true, log_outputs=None, training=False, ctx=None):
+        """Loss de chaque agent pour le loss_type configuré : liste de K scalaires."""
+        y = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
+        if ctx is None:
+            ctx = self._loss_context(tf.shape(y)[0], training)
+        per_agent = loss_lib.agent_losses(self._loss_type, ctx, outputs, y, log_outputs,
+                                          single_agent_loss=self._single_agent_loss)
+        return tf.unstack(per_agent, num=self._num_agents)
 
-    @staticmethod
-    def _ce_soft(targets, log_p):
-        """CE(cible douce, y^k) pour chaque agent. targets : (batch, C) ou (batch, K, C)."""
-        if len(targets.shape) == 2:
-            targets = targets[:, None, :]
-        return -tf.reduce_sum(targets * log_p, axis=-1)
-
-    def _interaction_losses(self, l_k, interaction):
-        """L^k = mean_batch( L_k * (L_k + alpha * interaction_k) ), renvoyée comme liste de K scalaires."""
-        return tf.unstack(tf.reduce_mean(l_k * (l_k + self._alpha * interaction), axis=0))
+    def _compute_named_loss(self, loss_type, outputs, y_true, log_outputs=None):
+        saved, self._loss_type = self._loss_type, loss_type
+        try:
+            return self.compute_losses(outputs, y_true, log_outputs)
+        finally:
+            self._loss_type = saved
 
     def compute_loss_leave_one_out(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^cons_{-k},y^k))"""
-        log_p = self._log_probs(outputs, log_outputs)
-        w_k = self.compute_confidence_weights(outputs, log_outputs)
-        loo = self.compute_leave_one_out_consensus(outputs, w_k)
-        l_k = self._ce_labels(y_true, log_p)
-        return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_soft(loo, log_p))
+        return self._compute_named_loss("leave_one_out", outputs, y_true, log_outputs)
 
     def compute_loss_global_interaction(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + alpha * (CE(y^cons, y^k) + CE(y, y^cons)))"""
-        log_p = self._log_probs(outputs, log_outputs)
-        log_w = self.compute_log_confidence_weights(outputs, log_outputs)
-        cons = self.consensus_simplicial(outputs, tf.exp(log_w), return_proba=True)
-        # log y^cons = logsumexp_k(log w_k + log y^k), borné comme les autres CE
-        raw_log_p = log_p if log_outputs is None else tf.cast(log_outputs, tf.float32)
-        log_cons = tf.maximum(tf.reduce_logsumexp(log_w[..., None] + raw_log_p, axis=1), _LOG_EPS)
-        l_glob = self._ce_labels(y_true, log_cons[:, None, :])   # (batch, 1)
-        l_loc = self._ce_soft(cons, log_p)                        # (batch, K)
-        l_k = self._ce_labels(y_true, log_p)
-        return self._interaction_losses(l_k, l_loc + l_glob)
+        return self._compute_named_loss("global_interaction", outputs, y_true, log_outputs)
 
     def compute_loss_vote_random(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^{vote}, y^k))"""
-        log_p = self._log_probs(outputs, log_outputs)
-        w_k = self.compute_confidence_weights(outputs, log_outputs)
-        batch_size = tf.shape(outputs)[0]
-        idx = tf.random.uniform([batch_size], 0, self._num_agents, dtype=tf.int32)
-        # Classe prédite par l'agent tiré au sort — label dur comme y_true
-        agent_probs = tf.gather_nd(outputs, tf.stack([tf.range(batch_size), idx], axis=1))
-        vote = tf.argmax(agent_probs, axis=-1, output_type=tf.int32)
-        l_k = self._ce_labels(y_true, log_p)
-        return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_labels(vote, log_p))
+        return self._compute_named_loss("vote_random", outputs, y_true, log_outputs)
 
     def compute_loss_majority_hard(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^{majority}, y^k))"""
-        log_p = self._log_probs(outputs, log_outputs)
-        w_k = self.compute_confidence_weights(outputs, log_outputs)
-        majority = self.consensus_majority(outputs)  # label dur (batch,)
-        l_k = self._ce_labels(y_true, log_p)
-        return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_labels(majority, log_p))
+        return self._compute_named_loss("majority_hard", outputs, y_true, log_outputs)
 
     def compute_loss_majority_loo(self, outputs, y_true, log_outputs=None):
-        """L^k = L_k * (L_k + alpha * (1 - w_k) * CE(y^majority_{-k}, y^k))
-
-        y^majority_{-k} = vote majoritaire des K-1 agents (agent k exclu).
-        """
-        log_p = self._log_probs(outputs, log_outputs)
-        w_k = self.compute_confidence_weights(outputs, log_outputs)
-        preds = tf.argmax(outputs, axis=-1, output_type=tf.int32)          # (batch, K)
-        votes = tf.one_hot(preds, depth=self._num_classes)                  # (batch, K, C)
-        votes_loo = tf.reduce_sum(votes, axis=1, keepdims=True) - votes     # (batch, K, C)
-        majority_loo = tf.argmax(votes_loo, axis=-1, output_type=tf.int32)  # (batch, K)
-        l_k = self._ce_labels(y_true, log_p)
-        return self._interaction_losses(l_k, (1.0 - w_k) * self._ce_labels(majority_loo, log_p))
-
-    def compute_losses(self, outputs, y_true, log_outputs=None):
-        """Dispatch vers le type de loss configuré. Renvoie une loss par agent."""
-        y = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
-        if self._num_agents == 1:
-            log_p = self._log_probs(outputs, log_outputs)
-            return [tf.reduce_mean(self._ce_labels(y, log_p)[:, 0])]
-        if self._loss_type not in LOSS_FUNCTIONS:
-            raise ValueError(f"Unknown loss_type: {self._loss_type}")
-        return getattr(self, LOSS_FUNCTIONS[self._loss_type])(outputs, y, log_outputs)
+        return self._compute_named_loss("majority_loo", outputs, y_true, log_outputs)
 
     # =========================================================================
     # TRAIN / TEST STEPS
@@ -398,7 +338,7 @@ class MultiAgentModel(tf.keras.Model):
             + self._agent_acc_trackers
         )
 
-    def _update_metrics(self, outputs, y, losses):
+    def _update_metrics(self, outputs, y, losses, training=False):
         """Met à jour les trackers (loss et accuracy par agent et du consensus)."""
         y_i = tf.cast(tf.reshape(y, [-1]), tf.int32)
         preds = tf.argmax(outputs, axis=-1, output_type=tf.int32)
@@ -407,7 +347,7 @@ class MultiAgentModel(tf.keras.Model):
             self._agent_loss_trackers[i].update_state(loss)
             self._agent_acc_trackers[i].update_state(tf.reduce_mean(correct[:, i]))
 
-        cons_preds = self.compute_consensus_predictions(outputs)
+        cons_preds = self.compute_consensus_predictions(outputs, training)
         self._loss_tracker.update_state(tf.reduce_mean(tf.stack(losses)))
         self._acc_tracker.update_state(
             tf.reduce_mean(tf.cast(tf.equal(cons_preds, y_i), tf.float32))
@@ -419,28 +359,35 @@ class MultiAgentModel(tf.keras.Model):
         with tf.GradientTape(persistent=True) as tape:
             log_outputs = self.forward_log_probs(x, training=True)
             outputs = tf.exp(log_outputs)
-            losses = self.compute_losses(outputs, y, log_outputs)
+            losses = self.compute_losses(outputs, y, log_outputs, training=True)
 
-        # Chaque agent n'est mis à jour qu'avec sa propre loss
+        # Chaque agent n'est mis à jour qu'avec sa propre loss. TensorFlow ne parcourt que
+        # les opérations entre la loss k et les poids de l'agent k : les réseaux des autres
+        # agents ne sont pas redérivés (vérifié : une passe arrière unique n'est pas plus rapide).
         for agent, opt, loss in zip(self._agents, self._optimizers, losses):
             grads = tape.gradient(loss, agent.trainable_variables)
             opt.apply_gradients(zip(grads, agent.trainable_variables))
         del tape
-        return self._update_metrics(outputs, y, losses)
+        return self._update_metrics(outputs, y, losses, training=True)
 
     def test_step(self, data):
         x, y = data
         log_outputs = self.forward_log_probs(x, training=False)
         outputs = tf.exp(log_outputs)
-        losses = self.compute_losses(outputs, y, log_outputs)
-        return self._update_metrics(outputs, y, losses)
+        losses = self.compute_losses(outputs, y, log_outputs, training=False)
+        return self._update_metrics(outputs, y, losses, training=False)
 
     # =========================================================================
     # EVALUATE / PREDICT / SUMMARY
     # =========================================================================
 
+    def _reset_eval_rng(self):
+        if self._eval_rng is not None:
+            self._eval_rng.reset()
+
     def evaluate(self, *args, return_dict=True, **kwargs):
-        """Wrapper Keras-compatible autour de Model.evaluate."""
+        """Model.evaluate, avec le tirage de la stratégie "vote" remis à zéro (résultat reproductible)."""
+        self._reset_eval_rng()
         return super().evaluate(*args, return_dict=return_dict, **kwargs)
 
     def predict(self, x, return_agents=False, return_probabilities=False, **kwargs):
@@ -457,13 +404,14 @@ class MultiAgentModel(tf.keras.Model):
             'consensus_probabilities', 'agents_probabilities'.
         """
         outputs = super().predict(x, **kwargs)  # (n_samples, num_agents, num_classes)
-        consensus = self.compute_consensus(outputs)
+        self._reset_eval_rng()
+        consensus = np.asarray(self.compute_consensus(outputs))
 
-        if len(consensus.shape) == 2:  # probabilités
-            consensus_probs = np.asarray(consensus)
+        if consensus.ndim == 2:  # probabilités
+            consensus_probs = consensus
             consensus_preds = np.argmax(consensus_probs, axis=-1)
         else:
-            consensus_preds = np.asarray(consensus)
+            consensus_preds = consensus
             consensus_probs = None
 
         result = {"consensus": consensus_preds}
@@ -482,7 +430,7 @@ class MultiAgentModel(tf.keras.Model):
         print("=" * 60)
         print(f"Nombre d'agents  : {self._num_agents}")
         print(f"Nombre de classes: {self._num_classes}")
-        print(f"Loss type        : {self._loss_type}")
+        print(f"Loss type        : {self._loss_type} ({self._form})")
         print(f"Strategy         : {self._strategy}")
         print(f"Alpha            : {self._alpha}")
         print(f"Temperature      : {self._temperature}")

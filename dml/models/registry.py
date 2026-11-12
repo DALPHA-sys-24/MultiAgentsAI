@@ -2,7 +2,8 @@
 Registre des architectures, indexées par un nom fixe.
 
 Ajouter une architecture :
-    1. écrire une fonction backbone(inputs) -> tenseur de caractéristiques (B, H, W, C) ;
+    1. écrire une fonction backbone(inputs, width=1.0) -> tenseur de caractéristiques (B, H, W, C),
+       où width multiplie le nombre de filtres de chaque couche ;
     2. la décorer avec @register_model("mon_nom") ;
     3. importer son module dans models/__init__.py.
 """
@@ -10,7 +11,7 @@ from typing import Callable, Dict, List
 
 import tensorflow as tf
 
-BackboneFn = Callable[[tf.Tensor], tf.Tensor]
+BackboneFn = Callable[..., tf.Tensor]  # backbone(inputs, width=1.0)
 
 _REGISTRY: Dict[str, BackboneFn] = {}
 

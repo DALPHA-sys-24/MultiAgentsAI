@@ -1,0 +1,8 @@
+[project]
+name = "dml"
+version = "0.3.0"
+description = "Apprentissage collaboratif multi-agents (Deep Mutual Learning) avec ResNet / MobileNet"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["dml*"]
