@@ -29,6 +29,14 @@
 # Nouvelle campagne (sans écraser l'ancienne) : changer CAMPAIGN ci-dessous.
 # =============================================================================
 
+# Lancé avec « bash fichier.sh » (hors SLURM) : crée Logs/ puis se soumet lui-même.
+# SLURM ouvre les fichiers --output/--error avant le script : Logs/ doit exister avant sbatch.
+if [ -z "$SLURM_JOB_ID" ]; then
+    mkdir -p Logs
+    exec sbatch "$0" "$@"
+fi
+mkdir -p Logs results
+
 CONFIG="configs/alpha_sweep.json"
 ALPHAS=(0 0.5 1 10 50 100)
 SEEDS=(0 1 2)

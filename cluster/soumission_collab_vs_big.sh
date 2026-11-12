@@ -17,6 +17,14 @@
 # Sortie : results/<date>_collab_vs_big/ (results.json réécrit après chaque graine)
 # =============================================================================
 
+# Lancé avec « bash fichier.sh » (hors SLURM) : crée Logs/ puis se soumet lui-même.
+# SLURM ouvre les fichiers --output/--error avant le script : Logs/ doit exister avant sbatch.
+if [ -z "$SLURM_JOB_ID" ]; then
+    mkdir -p Logs
+    exec sbatch "$0" "$@"
+fi
+mkdir -p Logs results
+
 CONFIG="configs/collab_vs_big.json"
 
 # -----------------------------------------------------------------------------

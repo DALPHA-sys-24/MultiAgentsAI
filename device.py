@@ -5,6 +5,10 @@ Choix du matériel : GPU si disponible, sinon CPU.
     from device import configure_device
     configure_device()             # GPU si visible par TensorFlow, sinon CPU
     configure_device(force_cpu=True)
+
+Le code principal des scripts tourne dans l'environnement du GPU :
+    with tf.device(default_device()):
+        main()
 """
 import os
 from typing import Optional
@@ -50,6 +54,15 @@ def configure_device(force_cpu: bool = False, precision: Optional[str] = None, v
         else:
             reason = "forcé" if force_cpu else "aucun GPU visible par TensorFlow"
             print(f"[device] CPU ({reason}, {os.cpu_count()} cœurs)")
-            if not force_cpu and os.name == "nt":
-                print("[device] Sous Windows, TensorFlow >= 2.11 n'utilise pas le GPU nativement : passer par WSL2.")
+            if not force_cpu:
+                # Indices pour comprendre pourquoi TensorFlow ne voit pas le GPU
+                print(f"[device] TensorFlow {tf.__version__} compilé avec CUDA : {tf.test.is_built_with_cuda()} | "
+                      f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', '(non défini)')}")
+                if os.name == "nt":
+                    print("[device] Sous Windows, TensorFlow >= 2.11 n'utilise pas le GPU nativement : passer par WSL2.")
     return device
+
+
+def default_device() -> str:
+    """ "/GPU:0" si TensorFlow voit un GPU, sinon "/CPU:0" (pour tf.device)."""
+    return "/GPU:0" if tf.config.list_physical_devices("GPU") else "/CPU:0"

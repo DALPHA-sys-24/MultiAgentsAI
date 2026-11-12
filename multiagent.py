@@ -135,7 +135,8 @@ class MultiAgentModel(tf.keras.Model):
             )
             agent.build((None,) + image_shape)
             self._agents.append(agent)
-        super().build(input_shape)
+        # Pas super().build() : sous Keras 2 (TF <= 2.15), il rappelle call() et boucle à l'infini
+        self.built = True
 
     def forward_log_probs(self, inputs, training=False):
         """Log-probabilités de chaque agent : (batch, K, num_classes)."""

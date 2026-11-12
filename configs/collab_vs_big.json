@@ -2,17 +2,17 @@
   "name": "collab_vs_big",
   "dataset": "cifar10",
 
-  "small_arch": "resnet20",
+  "small_arch": "resnet32",
   "num_agents": 3,
   "loss_type": "global_interaction",
   "strategy": "simplicial",
   "alpha": 1.0,
   "temperature": 1.0,
 
-  "epochs": 10,
+  "epochs": 20,
   "batch_size": 128,
-  "optimizer": "sgd",
-  "lr": 0.001,
+  "optimizer": "adamw",
+  "lr": 0.01,
   "weight_decay": 0.0005,
   "optimizer_kwargs": null,
   "big_optimizer": null,
@@ -24,9 +24,9 @@
 
   "val_size": 10000,
   "train_subset": null,
-  "seeds": [0, 1, 2],
+  "seeds": [0],
 
-  "precision": "float32",
+  "precision": "float16",
   "jit": "auto",
   "out_dir": "results"
 }

@@ -30,9 +30,10 @@ import time
 from datetime import datetime
 
 import numpy as np
+import tensorflow as tf
 
 from data import load_dataset
-from device import configure_device
+from device import configure_device, default_device
 from multiagent import LOSS_FUNCTIONS, STRATEGIES
 from optimizers import available_optimizers
 from run_experiment import parse_jit, summarize, train_kwargs
@@ -296,4 +297,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Tout le code principal tourne sur le GPU s'il est visible, sinon sur le CPU
+    with tf.device(default_device()):
+        main()
