@@ -112,7 +112,7 @@ Avec les réglages par défaut, l'entraînement est **identique au bit près** �
 
 ## Configuration
 
-Les valeurs par défaut sont dans `dml/utils/config.py`, le fichier JSON les remplace, la ligne de commande remplace le JSON. Chaque champ a son option : `python -m experiments.alpha_sweep --help` donne la liste.
+Les valeurs par défaut sont dans `dml/utils/config.py`, le fichier JSON les remplace, la ligne de commande remplace le JSON. Chaque champ a son option : `python -m experiments.alpha_sweep --help` donne la liste. Les deux écritures marchent : `--n-runs 3` ou `--n_runs 3`.
 
 Ajouter un réglage : ajouter un champ dans la dataclass (`mon_reglage: float = opt(0.5, "explication")`). L'option `--mon-reglage` et la vérification sont créées automatiquement ; il reste à le transmettre là où il sert.
 
