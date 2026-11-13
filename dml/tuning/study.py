@@ -1,16 +1,28 @@
 """Création de l'étude Optuna et export des résultats."""
 import logging
 import os
+import warnings
 from typing import Any, Dict
 
 log = logging.getLogger(__name__)
 
 SAMPLERS = ("tpe", "random", "cmaes")
+
+
+def _quiet_optuna():
+    """Les avertissements « experimental » d'Optuna (JournalStorage, TPE multivariate) se répètent
+    à chaque essai dans le .err sans rien signaler d'utile : on les masque."""
+    try:
+        from optuna.exceptions import ExperimentalWarning
+        warnings.filterwarnings("ignore", category=ExperimentalWarning)
+    except ImportError:
+        pass
 PRUNERS = ("median", "hyperband", "none")
 
 
 def make_sampler(name: str, seed: int):
     import optuna
+    _quiet_optuna()
     if name == "tpe":
         return optuna.samplers.TPESampler(seed=seed, multivariate=True)
     if name == "random":
@@ -38,6 +50,7 @@ def make_storage(run_dir: str):
     travailler en même temps sur la même étude, même sur un disque réseau (contrairement à SQLite).
     """
     from optuna.storages import JournalStorage
+    _quiet_optuna()
     path = os.path.join(run_dir, "study.journal")
     try:
         from optuna.storages.journal import JournalFileBackend          # Optuna >= 4.0

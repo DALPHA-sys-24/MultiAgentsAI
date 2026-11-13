@@ -9,7 +9,7 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 ├── dml/                        package Python (tout le code réutilisable)
 │   ├── core/                   le système multi-agents
 │   │   ├── multiagent.py       MultiAgentModel : K agents, un optimiseur par agent, train/test step
-│   │   ├── losses.py           les 5 losses, registre @register_loss
+│   │   ├── losses.py           les losses (5 du projet + DML), registre @register_loss
 │   │   ├── consensus.py        poids de confiance, 4 stratégies, registre @register_strategy
 │   │   └── callbacks.py        AgentHistoryCallback, ConvergenceTracker
 │   ├── models/                 architectures des agents, registre @register_model
@@ -46,7 +46,8 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 │   ├── best_hyperparams.sh     job array : dataset x worker Optuna (un seul modèle)
 │   ├── merge.sh                fusion des résultats (soumise automatiquement)
 │   └── common.sh               fonctions communes (vérif. de --array, soumission de la fusion)
-├── notebooks/                  analyse des résultats (resultats.ipynb, resultats_sweep.ipynb)
+├── notebooks/                  analyse : resultats.ipynb (un collab_vs_big), resultats_sweep.ipynb (un sweep),
+│                               comparaison.ipynb (plusieurs méthodes côte à côte)
 ├── tests/                      tests pytest
 ├── runs/                       sorties des runs (ignoré par Git)
 └── Logs/                       sorties SLURM .out / .err (ignoré par Git)
@@ -87,6 +88,41 @@ Où ajouter quoi :
 
 Le nom enregistré est accepté partout ensuite : dans `compile(...)`, dans le JSON et sur la ligne de commande.
 
+## Baseline DML (Zhang et al., 2018)
+
+Loss `dml` : I_k = 1/(K−1) · Σ_{j≠k} KL(y^j ‖ y^k), les prédictions des autres agents étant des cibles fixes (`stop_gradient`).
+
+| Variante | Réglages | Loss de l'agent k |
+|---|---|---|
+| DML classique (papier) | `--loss-type dml --loss-form additive`, α = 1 | CE(y, y^k) + 1/(K−1) Σ KL(y^j ‖ y^k) |
+| DML dans la forme du projet | `--loss-type dml --loss-form multiplicative` | L_k · (L_k + α · KL) |
+
+```bash
+# DML classique (α = 1) et l'ensemble indépendant (α = 0, CE seule) dans le même sweep
+python -m experiments.alpha_sweep --loss-type dml --loss-form additive --alphas 0 1 --tag dml
+# variante multiplicative, plusieurs α
+python -m experiments.alpha_sweep --loss-type dml --loss-form multiplicative --alphas 0 1 10 --tag dml_mult
+# K petits agents DML vs grand agent
+python -m experiments.collab_vs_big --loss-type dml --loss-form additive --alpha 1 --tag dml
+```
+
+Sur le cluster : la DML est déjà dans la liste `METHODS` de `slurm/alpha_sweep.sh` et `slurm/collab_vs_big.sh` ; elle tourne dans le même job array que ta méthode.
+
+Deux différences avec le papier :
+- les K agents sont mis à jour en même temps à partir du même forward, alors que le papier les met à jour l'un après l'autre dans un pas (la mise à jour simultanée est celle de la plupart des implémentations publiques) ;
+- le papier évalue chaque réseau seul : nos résultats le donnent aussi (chaque agent, agent médian, meilleur agent, moyenne simple), en plus du consensus.
+
+## Comparer les méthodes (`notebooks/comparaison.ipynb`)
+
+Le notebook lit tous les dossiers `runs/alpha_sweep_<arch>_<dataset>_x<K>*` et `runs/collab_vs_big_<arch>_<dataset>_x<K>*` (avec ou sans tag) et compare ta méthode (chaque α), les agents indépendants (α = 0), la DML et le grand agent. Régler `DATASET`, `ARCH`, `K` en tête, ou donner la liste `RUN_DIRS`.
+
+- **Tableau** : consensus, moyenne simple, agent médian, meilleur agent, en médiane [q05 ; q95] sur les graines (`comparaison.csv`).
+- **Accuracy par méthode** : consensus (point plein) et agent médian (point creux), couleur par famille.
+- **Différence appariée** : pour chaque graine, écart d'accuracy avec la référence (grand agent, sinon agents indépendants) à graine égale, et nombre de graines gagnées.
+- **Courbes d'apprentissage** : accuracy de validation par époque, médiane sur les graines.
+
+Sorties dans `runs/comparaison_<arch>_<dataset>_x<K>/`. Pour que la comparaison soit juste, toutes les variantes doivent avoir le même dataset, la même architecture, le même K, les mêmes époques et les mêmes graines (`N_RUNS`).
+
 ## Nouveautés : `runs/`, `n_runs`, job arrays
 
 - `--n-runs N` remplace `--seeds` (graines 0 à N - 1).
@@ -112,7 +148,7 @@ Avec les réglages par défaut, l'entraînement est **identique au bit près** �
 
 ## Configuration
 
-Les valeurs par défaut sont dans `dml/utils/config.py`, le fichier JSON les remplace, la ligne de commande remplace le JSON. Chaque champ a son option : `python -m experiments.alpha_sweep --help` donne la liste.
+Les valeurs par défaut sont dans `dml/utils/config.py`, le fichier JSON les remplace, la ligne de commande remplace le JSON. Chaque champ a son option : `python -m experiments.alpha_sweep --help` donne la liste. Les deux écritures marchent : `--n-runs 3` ou `--n_runs 3`.
 
 Ajouter un réglage : ajouter un champ dans la dataclass (`mon_reglage: float = opt(0.5, "explication")`). L'option `--mon-reglage` et la vérification sont créées automatiquement ; il reste à le transmettre là où il sert.
 
@@ -282,7 +318,7 @@ print(out["summary"])
 La recherche porte sur **un seul modèle** (une architecture `arch`) sur un jeu de données, sans agents ni alpha. Les meilleurs paramètres trouvés (lr, weight decay, optimiseur...) servent ensuite, si tu veux, à construire K agents de cette architecture.
 
 ```bash
-pip install optuna                                             # une fois (cluster : pip install --user optuna)
+pip install optuna                                             # en local, une fois (cluster : module Optuna/3.5.0-foss-2023a, déjà dans les scripts)
 python -m experiments.best_hyperparams                         # configs/best_hyperparams.json
 python -m experiments.best_hyperparams --dataset cifar10 --arch resnet32 --n-trials 50
 python -m experiments.best_hyperparams --cpu --train-subset 2000 --epochs 3 --n-trials 2 --n-workers 1   # test rapide
@@ -331,13 +367,15 @@ Relancer la même commande ajoute des essais à la recherche existante.
 Un script sbatch par expérience. Les réglages sont en tête du script (datasets, `N_RUNS`, hyperparamètres) ; ceux qui n'y sont pas viennent de `configs/<expérience>.json`. Depuis la racine du dépôt :
 
 ```bash
-sbatch slurm/collab_vs_big.sh      # 2 datasets x 10 runs x (petits | grand) = 40 tâches -> --array=0-39
-sbatch slurm/alpha_sweep.sh        # 2 datasets x 5 runs x 3 alphas = 30 tâches -> --array=0-29
-sbatch slurm/best_hyperparams.sh   # 1 modèle, 1 dataset x 8 workers = 8 tâches -> --array=0-7 (pip install --user optuna avant)
+sbatch slurm/collab_vs_big.sh      # 2 datasets x 2 méthodes x 10 runs x (petits | grand) = 80 tâches -> --array=0-79
+sbatch slurm/alpha_sweep.sh        # 2 datasets x 2 méthodes x 5 runs x 3 alphas = 60 tâches -> --array=0-59
+sbatch slurm/best_hyperparams.sh   # 1 modèle, 1 dataset x 8 workers = 8 tâches -> --array=0-7 (module Optuna chargé par le script)
 ```
 
 - **Une tâche = un dataset × un run** (× petits agents / grand agent, ou × alpha). L'indice `SLURM_ARRAY_TASK_ID` donne le dataset et la tâche, comme dans les autres projets. Toutes les tâches tournent en parallèle. Les K agents d'un run sont dans la même tâche.
 - **Taille du job array** : si tu changes `DATASETS`, `N_RUNS` ou `ALPHAS`, mets à jour `#SBATCH --array=0-<N_TOTAL - 1>` (la valeur est en commentaire à côté). Un `--array` trop court est signalé dans le `.out` de la tâche 0, et les indices en trop ne font rien.
+- **Plusieurs méthodes dans le même job array** : `METHODS` en tête de `alpha_sweep.sh` et `collab_vs_big.sh` liste les losses à comparer, une par ligne, au format `"loss_type:forme:tag"`. Par défaut : ta méthode (`global_interaction:multiplicative:`) et la DML classique (`dml:additive:dml`). Chaque méthode a son dossier (le tag est ajouté au nom), donc `notebooks/comparaison.ipynb` les retrouve toutes. Ajouter une ligne (ex. `"dml:multiplicative:dml_mult"`) ajoute une méthode : penser à `--array`.
+- **Best model automatique** (`USE_BEST=1`, défaut) : pour chaque dataset, `alpha_sweep.sh` et `collab_vs_big.sh` cherchent `runs/best_hyperparams_<ARCH>_<dataset>/best_<expérience>.json`. S'il existe, ses paramètres (optimiseur, lr, weight decay, batch...) remplacent `OPTIMIZER`, `LEARNING_RATE`, `BATCH_SIZE` du script, et les résultats vont dans `..._x<K>_best/`. Sinon, les valeurs du script sont utilisées. La ligne `Paramètres:` du `.out` dit lequel des deux. `USE_BEST=0` force les valeurs du script. Les époques, K, la loss et α restent ceux du script.
 - **Fusion** : la 1re tâche de chaque dataset soumet `slurm/merge.sh`, qui démarre quand tout le job array est fini et écrit `results.json` (`AUTO_MERGE=0 sbatch ...` pour ne pas le faire). Chaque tâche met aussi `results.json` à jour en finissant : les résultats partiels sont lisibles pendant la campagne. À la main : `python -m experiments.collab_vs_big [mêmes options] --merge-only`.
 - **Sorties SLURM** dans `Logs/<expérience>_<job>_<tâche>.out / .err` ; résultats dans `runs/<expérience>_<arch>_<dataset>_x<K>/`.
 - **Relancer** le même script ne refait que les tâches non terminées ; une tâche coupée reprend à sa dernière époque. Une seule tâche : `sbatch --array=7 slurm/collab_vs_big.sh`.

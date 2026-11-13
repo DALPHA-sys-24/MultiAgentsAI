@@ -16,7 +16,7 @@
 # (N_WORKERS x N_TRIALS essais au total par dataset).
 # 1 dataset x 8 workers = 8 tâches -> --array=0-7
 # À lancer depuis la racine du dépôt :  sbatch slurm/best_hyperparams.sh
-# Optuna n'est pas un module : « pip install --user optuna » une fois sur le nœud de connexion.
+# Optuna : module Optuna/3.5.0-foss-2023a (chargé plus bas).
 # Relancer ajoute des essais à la recherche existante. Espace de recherche : configs/best_hyperparams.json
 # Sortie : runs/best_hyperparams_<arch>_<dataset>[_<tag>]/ (best.json, best_collab_vs_big.json, trials.csv)
 # =============================================================================
@@ -67,6 +67,7 @@ ml TensorFlow/2.15.1-foss-2023a-CUDA-12.1.1
 ml matplotlib/3.7.2
 ml Seaborn/0.13.2-gfbf-2023a
 ml scikit-learn/1.3.1-gfbf-2023a
+ml Optuna/3.5.0-foss-2023a
 
 [ -d dml ] || { echo "Lancer sbatch depuis la racine du dépôt (dossier qui contient dml/)"; exit 1; }
 source slurm/common.sh

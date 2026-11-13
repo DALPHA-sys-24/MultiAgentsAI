@@ -26,6 +26,7 @@ ml TensorFlow/2.15.1-foss-2023a-CUDA-12.1.1
 ml matplotlib/3.7.2
 ml Seaborn/0.13.2-gfbf-2023a
 ml scikit-learn/1.3.1-gfbf-2023a
+ml Optuna/3.5.0-foss-2023a
 
 source slurm/common.sh
 echo "FUSION $EXP | $(date) | options : $*"
