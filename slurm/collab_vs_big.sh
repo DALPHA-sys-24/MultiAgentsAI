@@ -30,6 +30,8 @@ TASKS_PER_DATASET=$((2 * N_RUNS))          # small_r<i> et big_r<i>
 CONFIG="configs/collab_vs_big.json"
 ARCH="resnet20"              # architecture des petits agents (le grand agent est la même, élargie)
 NUM_AGENTS=3
+LOSS_TYPE="global_interaction"   # ou "dml" (baseline Zhang et al. 2018)
+LOSS_FORM="multiplicative"       # "additive" + alpha = 1 avec dml : DML classique
 OPTIMIZER="sgd"
 LEARNING_RATE=0.01
 EPOCHS=20
@@ -52,6 +54,7 @@ RUN_IDX=$((TASK_IDX / 2))
 PART=$([ $((TASK_IDX % 2)) -eq 0 ] && echo "petits agents" || echo "grand agent")
 
 ARGS=(--config "$CONFIG" --dataset "$DATASET" --small-arch "$ARCH" --num-agents "$NUM_AGENTS"
+      --loss-type "$LOSS_TYPE" --loss-form "$LOSS_FORM"
       --optimizer "$OPTIMIZER" --lr "$LEARNING_RATE" --epochs "$EPOCHS" --batch-size "$BATCH_SIZE"
       --alpha "$ALPHA" --n-runs "$N_RUNS")
 [ -n "$TAG" ] && ARGS+=(--tag "$TAG")
