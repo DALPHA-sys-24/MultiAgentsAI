@@ -169,24 +169,6 @@ def majority_loo(ctx, outputs, log_p, raw_log_p, y):
     return (1.0 - w_k) * ce_labels(majority, log_p, ctx.num_classes)
 
 
-@register_loss("dml")
-def dml(ctx, outputs, log_p, raw_log_p, y):
-    """
-    Deep Mutual Learning (Zhang et al., 2018) : I_k = 1/(K-1) * sum_{j != k} KL(y^j || y^k).
-
-    Les prédictions des autres agents sont des cibles fixes (stop_gradient), comme dans le papier.
-    - forme "additive", alpha = 1 : L^k = CE(y, y^k) + 1/(K-1) sum KL, la DML classique ;
-    - forme "multiplicative"      : L^k = L_k * (L_k + alpha * KL), variante dans la forme du projet.
-    """
-    k = tf.shape(outputs)[1]
-    targets = tf.stop_gradient(tf.cast(outputs, tf.float32))                       # p_j (batch, K, C)
-    entropy = -tf.reduce_sum(tf.math.xlogy(targets, targets), axis=-1)           # H(p_j) (batch, K)
-    cross = -tf.einsum("bjc,bkc->bjk", targets, log_p)                            # CE(p_j, p_k) (batch, K, K)
-    kl = cross - entropy[:, :, None]                                              # KL(p_j || p_k)
-    kl = kl * (1.0 - tf.eye(k, dtype=kl.dtype))[None]                             # sans j = k
-    return tf.reduce_sum(kl, axis=1) / tf.cast(tf.maximum(k - 1, 1), kl.dtype)   # (batch, K)
-
-
 # =============================================================================
 # CALCUL DES LOSSES PAR AGENT
 # =============================================================================

@@ -31,8 +31,6 @@ TASKS_PER_DATASET=$((N_RUNS * N_ALPHAS))
 CONFIG="configs/alpha_sweep.json"
 ARCH="resnet20"
 NUM_AGENTS=5
-LOSS_TYPE="global_interaction"   # ou "dml" (baseline Zhang et al. 2018)
-LOSS_FORM="multiplicative"       # "additive" + alpha = 1 avec dml : DML classique
 OPTIMIZER="sgd"
 LEARNING_RATE=0.01
 EPOCHS=200
@@ -54,7 +52,6 @@ RUN_IDX=$((TASK_IDX / N_ALPHAS))
 ALPHA=${ALPHAS[$((TASK_IDX % N_ALPHAS))]}
 
 ARGS=(--config "$CONFIG" --dataset "$DATASET" --arch "$ARCH" --num-agents "$NUM_AGENTS"
-      --loss-type "$LOSS_TYPE" --loss-form "$LOSS_FORM"
       --optimizer "$OPTIMIZER" --lr "$LEARNING_RATE" --epochs "$EPOCHS" --batch-size "$BATCH_SIZE"
       --alphas "${ALPHAS[@]}" --n-runs "$N_RUNS")
 [ -n "$TAG" ] && ARGS+=(--tag "$TAG")

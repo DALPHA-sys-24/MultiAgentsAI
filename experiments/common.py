@@ -25,7 +25,6 @@ import json
 import logging
 import os
 import shutil
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -52,17 +51,6 @@ def copy_atomic(src: str, dst: str) -> None:
     tmp = f"{dst}.{os.getpid()}.tmp"
     shutil.copyfile(src, tmp)
     os.replace(tmp, dst)
-
-
-def normalize_flags(argv: List[str]) -> List[str]:
-    """--n_runs, --batch_size... acceptés comme --n-runs, --batch-size (les deux écritures marchent)."""
-    out = []
-    for a in argv:
-        if a.startswith("--"):
-            name, eq, value = a.partition("=")
-            a = name.replace("_", "-") + eq + value
-        out.append(a)
-    return out
 
 
 @dataclass
@@ -109,7 +97,7 @@ class Experiment:
         p.add_argument("--cpu", action="store_true", help="Force le CPU même si un GPU est disponible.")
         p.add_argument("--verbose", type=int, default=2)
         add_config_arguments(p, self.CONFIG_CLS)
-        return p.parse_args(normalize_flags(sys.argv[1:] if argv is None else argv))
+        return p.parse_args(argv)
 
     def load_config(self, args):
         path = args.config or os.path.join(ROOT, "configs", f"{self.NAME}.json")

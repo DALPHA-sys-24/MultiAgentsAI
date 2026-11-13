@@ -53,8 +53,3 @@ def test_other_settings_refuse_same_folder(tmp_path, fake_data):
     CollabVsBig().main(ARGS + ["--n-runs", "2", "--run-dir", run_dir, "--list-tasks"])   # n_runs extensible
     with pytest.raises(SystemExit, match="--tag"):
         CollabVsBig().main(ARGS + ["--lr", "0.5", "--run-dir", run_dir, "--list-tasks"])
-
-
-def test_underscore_flags_accepted():
-    args = CollabVsBig().parse_args(["--n_runs", "3", "--batch_size=64", "--task_index", "2"])
-    assert (args.n_runs, args.batch_size, args.task_index) == (3, 64, 2)

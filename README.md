@@ -9,7 +9,7 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 ├── dml/                        package Python (tout le code réutilisable)
 │   ├── core/                   le système multi-agents
 │   │   ├── multiagent.py       MultiAgentModel : K agents, un optimiseur par agent, train/test step
-│   │   ├── losses.py           les losses (5 du projet + DML), registre @register_loss
+│   │   ├── losses.py           les 5 losses, registre @register_loss
 │   │   ├── consensus.py        poids de confiance, 4 stratégies, registre @register_strategy
 │   │   └── callbacks.py        AgentHistoryCallback, ConvergenceTracker
 │   ├── models/                 architectures des agents, registre @register_model
@@ -87,30 +87,6 @@ Où ajouter quoi :
 
 Le nom enregistré est accepté partout ensuite : dans `compile(...)`, dans le JSON et sur la ligne de commande.
 
-## Baseline DML (Zhang et al., 2018)
-
-Loss `dml` : I_k = 1/(K−1) · Σ_{j≠k} KL(y^j ‖ y^k), les prédictions des autres agents étant des cibles fixes (`stop_gradient`).
-
-| Variante | Réglages | Loss de l'agent k |
-|---|---|---|
-| DML classique (papier) | `--loss-type dml --loss-form additive`, α = 1 | CE(y, y^k) + 1/(K−1) Σ KL(y^j ‖ y^k) |
-| DML dans la forme du projet | `--loss-type dml --loss-form multiplicative` | L_k · (L_k + α · KL) |
-
-```bash
-# DML classique (α = 1) et l'ensemble indépendant (α = 0, CE seule) dans le même sweep
-python -m experiments.alpha_sweep --loss-type dml --loss-form additive --alphas 0 1 --tag dml
-# variante multiplicative, plusieurs α
-python -m experiments.alpha_sweep --loss-type dml --loss-form multiplicative --alphas 0 1 10 --tag dml_mult
-# K petits agents DML vs grand agent
-python -m experiments.collab_vs_big --loss-type dml --loss-form additive --alpha 1 --tag dml
-```
-
-Sur le cluster : en tête de `slurm/alpha_sweep.sh` ou `slurm/collab_vs_big.sh`, mettre `LOSS_TYPE="dml"`, `LOSS_FORM="additive"` (ou `"multiplicative"`) et `TAG="dml"`.
-
-Deux différences avec le papier :
-- les K agents sont mis à jour en même temps à partir du même forward, alors que le papier les met à jour l'un après l'autre dans un pas (la mise à jour simultanée est celle de la plupart des implémentations publiques) ;
-- le papier évalue chaque réseau seul : nos résultats le donnent aussi (chaque agent, agent médian, meilleur agent, moyenne simple), en plus du consensus.
-
 ## Nouveautés : `runs/`, `n_runs`, job arrays
 
 - `--n-runs N` remplace `--seeds` (graines 0 à N - 1).
@@ -136,7 +112,7 @@ Avec les réglages par défaut, l'entraînement est **identique au bit près** �
 
 ## Configuration
 
-Les valeurs par défaut sont dans `dml/utils/config.py`, le fichier JSON les remplace, la ligne de commande remplace le JSON. Chaque champ a son option : `python -m experiments.alpha_sweep --help` donne la liste. Les deux écritures marchent : `--n-runs 3` ou `--n_runs 3`.
+Les valeurs par défaut sont dans `dml/utils/config.py`, le fichier JSON les remplace, la ligne de commande remplace le JSON. Chaque champ a son option : `python -m experiments.alpha_sweep --help` donne la liste.
 
 Ajouter un réglage : ajouter un champ dans la dataclass (`mon_reglage: float = opt(0.5, "explication")`). L'option `--mon-reglage` et la vérification sont créées automatiquement ; il reste à le transmettre là où il sert.
 

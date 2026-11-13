@@ -34,7 +34,7 @@ EVAL_ON = ("final", "best")
 REFERENCE_LOSSES = ("ce", "same_as_agents")
 
 # Stratégie de consensus imposée quand alpha = 0 (agents indépendants) dans le sweep
-STRATEGY_NO_INTERACTION = "simpicial"
+STRATEGY_NO_INTERACTION = "majority"
 
 
 def opt(default, help: str = "", choices=None, kind: str = "auto"):

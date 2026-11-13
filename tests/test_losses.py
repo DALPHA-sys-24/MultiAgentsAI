@@ -96,32 +96,3 @@ def test_custom_loss_can_be_registered():
     ce = tf.keras.losses.sparse_categorical_crossentropy(tf.tile(y[:, None], [1, 3]), out)
     np.testing.assert_allclose([float(v) for v in model.compute_losses(out, y)],
                                tf.reduce_mean(ce ** 2, axis=0).numpy(), rtol=1e-5)
-
-
-def _kl(p, q):
-    """KL(p || q), log q borné à log(1e-7) comme toutes les CE du projet."""
-    p_log_p = np.where(p > 0, p * np.log(np.where(p > 0, p, 1.0)), 0.0)
-    return float(np.sum(p_log_p - p * np.log(np.clip(q, 1e-7, 1.0))))
-
-
-@pytest.mark.parametrize("form", ["additive", "multiplicative"])
-def test_dml_matches_zhang_formula_for_two_agents(form):
-    alpha = 0.7
-    model, x, y = make_model(k=2, loss_type="dml", alpha=alpha, form=form)
-    out = model(x).numpy().astype("float64")                      # (batch, 2, C)
-    losses = [float(l) for l in model.compute_losses(model(x), y)]
-    yi = y.numpy()
-    for k, j in ((0, 1), (1, 0)):
-        ce = -np.log(np.clip(out[np.arange(len(yi)), k, yi], 1e-7, 1.0))
-        kl = np.array([_kl(out[b, j], out[b, k]) for b in range(len(yi))])
-        expected = ce + alpha * kl if form == "additive" else ce * (ce + alpha * kl)
-        np.testing.assert_allclose(losses[k], expected.mean(), rtol=1e-4)
-
-
-def test_dml_gradient_of_agent_does_not_reach_other_agents():
-    model, x, y = make_model(k=3, loss_type="dml", alpha=1.0, form="additive")
-    with tf.GradientTape() as tape:
-        loss_0 = model.compute_losses(model(x, training=True), y)[0]
-    others = [v for a in model._agents[1:] for v in a.trainable_variables]
-    grads = tape.gradient(loss_0, others)
-    assert all(g is None or float(tf.reduce_max(tf.abs(g))) == 0.0 for g in grads)
