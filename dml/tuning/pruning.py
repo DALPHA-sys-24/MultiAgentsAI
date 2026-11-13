@@ -6,12 +6,8 @@ import tensorflow as tf
 
 # Métrique suivie -> fonction des logs Keras de fin d'époque
 METRICS: Dict[str, Callable[[dict], Optional[float]]] = {
-    # accuracy du consensus sur la validation
+    # accuracy sur la validation (consensus si K > 1, le modèle lui-même si K = 1)
     "val_accuracy": lambda logs: logs.get("val_accuracy"),
-    # accuracy moyenne des agents sur la validation
-    "val_agent_accuracy": lambda logs: (
-        float(np.mean([v for k, v in logs.items() if k.startswith("val_accuracy_agent")]))
-        if any(k.startswith("val_accuracy_agent") for k in logs) else None),
     # loss de validation (à minimiser)
     "val_loss": lambda logs: logs.get("val_loss"),
 }

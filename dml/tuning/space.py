@@ -4,7 +4,6 @@ Espace de recherche décrit en JSON, une entrée par hyperparamètre :
     "search_space": {
         "lr":           {"type": "float", "low": 1e-4, "high": 0.3, "log": true},
         "weight_decay": {"type": "float", "low": 1e-5, "high": 1e-2, "log": true},
-        "alpha":        {"type": "float", "low": 0.0, "high": 50.0},
         "batch_size":   {"type": "int", "low": 64, "high": 256, "step": 64},
         "optimizer":    {"type": "categorical", "choices": ["sgd", "adam", "adamw"]},
         "optimizer_kwargs": {"type": "categorical", "choices": [null, {"global_clipnorm": 1.0}]}

@@ -1,13 +1,9 @@
 {
-  "_note": "Recherche Optuna. search_space : une entrée par hyperparamètre (type float / int / categorical). Toute clé de la config peut y figurer. n_workers processus (job array) x n_trials essais chacun.",
+  "_note": "Recherche Optuna sur UN modèle (arch) : les meilleurs paramètres servent ensuite à construire K agents (best_collab_vs_big.json, best_alpha_sweep.json). search_space : une entrée par hyperparamètre (type float / int / categorical). n_workers processus (job array) x n_trials essais chacun.",
   "dataset": "fashion_mnist",
   "arch": "resnet20",
-  "num_agents": 3,
-  "loss_type": "global_interaction",
-  "strategy": "simplicial",
+  "loss": "ce",
   "loss_form": "multiplicative",
-  "alpha": 1.0,
-  "temperature": 1.0,
   "epochs": 20,
   "batch_size": 128,
   "optimizer": "sgd",
@@ -17,7 +13,6 @@
   "optimizer_kwargs": null,
   "warmup_epochs": 1,
   "augment": true,
-  "per_agent_views": false,
   "val_size": 5000,
   "train_subset": null,
   "n_workers": 4,
@@ -33,11 +28,6 @@
       "low": 1e-05,
       "high": 0.01,
       "log": true
-    },
-    "alpha": {
-      "type": "float",
-      "low": 0.0,
-      "high": 50.0
     },
     "optimizer": {
       "type": "categorical",

@@ -43,7 +43,7 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 ├── slurm/                      cluster (sbatch slurm/<expérience>.sh)
 │   ├── collab_vs_big.sh        job array : dataset x run x (petits | grand)
 │   ├── alpha_sweep.sh          job array : dataset x run x alpha
-│   ├── best_hyperparams.sh     job array : dataset x worker Optuna
+│   ├── best_hyperparams.sh     job array : dataset x worker Optuna (un seul modèle)
 │   ├── merge.sh                fusion des résultats (soumise automatiquement)
 │   └── common.sh               fonctions communes (vérif. de --array, soumission de la fusion)
 ├── notebooks/                  analyse des résultats (resultats.ipynb, resultats_sweep.ipynb)
@@ -82,7 +82,7 @@ Où ajouter quoi :
 | un optimiseur | `dml/training/optimizers.py` | `@register_optimizer("nom")` |
 | un jeu de données | `dml/data/datasets.py` | `@register_dataset("nom")` |
 | un réglage de config | `dml/utils/config.py` | un champ `opt(...)` dans la dataclass (option `--nom` créée automatiquement) |
-| un hyperparamètre à chercher | `configs/best_hyperparams.json` | une entrée dans `search_space` (toute clé de la config) |
+| un hyperparamètre à chercher | `configs/best_hyperparams.json` | une entrée dans `search_space` (un réglage du modèle) |
 | une expérience | `experiments/<nom>.py` + `configs/<nom>.json` | une sous-classe de `Experiment` (`experiments/common.py`) avec `tasks`, `run_task`, `merge` ; copier `alpha_sweep.py` comme modèle. plus `slurm/<nom>.sh` copié de `slurm/alpha_sweep.sh` |
 
 Le nom enregistré est accepté partout ensuite : dans `compile(...)`, dans le JSON et sur la ligne de commande.
@@ -277,44 +277,52 @@ out = benchmark_architectures(
 print(out["summary"])
 ```
 
-### Recherche des meilleurs hyperparamètres
+### Recherche des meilleurs hyperparamètres d'un modèle
+
+La recherche porte sur **un seul modèle** (une architecture `arch`) sur un jeu de données, sans agents ni alpha. Les meilleurs paramètres trouvés (lr, weight decay, optimiseur...) servent ensuite, si tu veux, à construire K agents de cette architecture.
 
 ```bash
 pip install optuna                                             # une fois (cluster : pip install --user optuna)
 python -m experiments.best_hyperparams                         # configs/best_hyperparams.json
-python -m experiments.best_hyperparams --dataset cifar10 --arch resnet32 --num-agents 3 --n-trials 50
+python -m experiments.best_hyperparams --dataset cifar10 --arch resnet32 --n-trials 50
 python -m experiments.best_hyperparams --cpu --train-subset 2000 --epochs 3 --n-trials 2 --n-workers 1   # test rapide
 sbatch slurm/best_hyperparams.sh                    # cluster : 8 GPU sur la même recherche
+
+# ensuite : K agents avec les meilleurs paramètres du modèle seul
+python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_fashion_mnist/best_collab_vs_big.json --num-agents 3
+python -m experiments.alpha_sweep   --config runs/best_hyperparams_resnet20_fashion_mnist/best_alpha_sweep.json   --num-agents 3
 ```
 
 J'utilise [Optuna](https://optuna.org) plutôt que Keras Tuner :
-- il ne demande pas de réécrire le modèle sous forme de `HyperModel`, et il marche donc avec `MultiAgentModel` et ses K optimiseurs ;
+- il ne demande pas de réécrire le modèle sous forme de `HyperModel` ;
 - son sampler TPE (bayésien) trouve de bonnes régions plus vite qu'une grille ou que le hasard ;
 - il arrête tôt les essais mauvais (pruning médian ou Hyperband) ;
 - plusieurs jobs SLURM peuvent travailler sur la même étude, grâce au fichier journal, qui marche aussi sur un disque réseau ;
 - il calcule l'importance de chaque hyperparamètre.
 
-**Ce qui est cherché.** `search_space` dans `configs/best_hyperparams.json` contient une entrée par hyperparamètre. Toute clé de la config peut y figurer (`lr`, `weight_decay`, `alpha`, `temperature`, `optimizer`, `batch_size`, `optimizer_kwargs`, `loss_type`, `arch`...) :
+**Ce qui est cherché.** `search_space` dans `configs/best_hyperparams.json` contient une entrée par hyperparamètre du modèle (`lr`, `weight_decay`, `optimizer`, `batch_size`, `optimizer_kwargs`, `warmup_epochs`, `augment`...) :
 
 ```json
 "search_space": {
   "lr":           {"type": "float", "low": 0.0001, "high": 0.3, "log": true},
-  "alpha":        {"type": "float", "low": 0.0, "high": 50.0},
+  "weight_decay": {"type": "float", "low": 0.00001, "high": 0.01, "log": true},
   "batch_size":   {"type": "int", "low": 64, "high": 256, "step": 64},
   "optimizer":    {"type": "categorical", "choices": ["sgd", "adam", "adamw"]}
 }
 ```
 
-Les autres réglages (jeu de données, `arch`, `num_agents`, `loss_type`, `epochs` par essai...) sont fixés dans le même fichier.
+Les autres réglages (jeu de données, `arch`, `epochs` par essai...) sont fixés dans le même fichier.
 
-**Critère.** `metric` vaut `val_accuracy` (accuracy du consensus, défaut), `val_agent_accuracy` (accuracy moyenne des agents) ou `val_loss`. Chaque essai est noté sur la meilleure époque de **validation**, et le test n'est jamais utilisé pendant la recherche.
+**Loss du modèle** (`loss`) : `ce` (cross-entropy, défaut) ou `same_as_agents` (`L_k²` en multiplicatif, comme un agent à α = 0). Avec SGD, la loss multiplicative des agents a un gradient environ `2 L_k` fois plus grand que la CE : un lr trouvé en CE peut être trop grand pour les K agents (lr 0.1 fait diverger la loss multiplicative). `same_as_agents` donne un lr directement transposable aux agents ; avec Adam / AdamW la différence est faible.
+
+**Critère.** `metric` vaut `val_accuracy` (défaut) ou `val_loss` du modèle. Chaque essai est noté sur la meilleure époque de **validation**, et le test n'est jamais utilisé pendant la recherche.
 
 **Parallélisation.** Une tâche = un worker qui lance `n_trials` essais ; les `n_workers` workers partagent la même étude (`study.journal`), soit `n_workers × n_trials` essais au total. En local, les workers tournent l'un après l'autre.
 
-**Résultats** dans `runs/best_hyperparams_<arch>_<dataset>_x<K>/` :
+**Résultats** dans `runs/best_hyperparams_<arch>_<dataset>/` :
 - `best.json` : meilleur essai, ses paramètres, importance de chaque hyperparamètre ;
 - `trials.csv` : tous les essais, avec leur état (terminé, arrêté tôt, échoué) ;
-- `best_config.json` : config prête pour l'évaluation finale sur le test avec plusieurs graines, `python -m experiments.alpha_sweep --config runs/best_hyperparams_.../best_config.json --epochs 200` (dossier `runs/alpha_sweep_..._best/`).
+- `best_collab_vs_big.json`, `best_alpha_sweep.json` : la config de l'expérience (`configs/<expérience>.json`) avec l'architecture, le jeu de données et les meilleurs paramètres du modèle. K se choisit au lancement (`--num-agents`), le nombre d'époques final reste celui de `configs/<expérience>.json`. Sortie dans `runs/<expérience>_<arch>_<dataset>_x<K>_best/`.
 
 Relancer la même commande ajoute des essais à la recherche existante.
 
@@ -325,7 +333,7 @@ Un script sbatch par expérience. Les réglages sont en tête du script (dataset
 ```bash
 sbatch slurm/collab_vs_big.sh      # 2 datasets x 10 runs x (petits | grand) = 40 tâches -> --array=0-39
 sbatch slurm/alpha_sweep.sh        # 2 datasets x 5 runs x 3 alphas = 30 tâches -> --array=0-29
-sbatch slurm/best_hyperparams.sh   # 1 dataset x 8 workers = 8 tâches -> --array=0-7 (pip install --user optuna avant)
+sbatch slurm/best_hyperparams.sh   # 1 modèle, 1 dataset x 8 workers = 8 tâches -> --array=0-7 (pip install --user optuna avant)
 ```
 
 - **Une tâche = un dataset × un run** (× petits agents / grand agent, ou × alpha). L'indice `SLURM_ARRAY_TASK_ID` donne le dataset et la tâche, comme dans les autres projets. Toutes les tâches tournent en parallèle. Les K agents d'un run sont dans la même tâche.

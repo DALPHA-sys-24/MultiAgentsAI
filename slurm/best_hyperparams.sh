@@ -9,14 +9,16 @@
 #SBATCH --error=Logs/best_hyperparams_%A_%a.err
 
 # =============================================================================
-# RECHERCHE DES MEILLEURS HYPERPARAMETRES (Optuna)
+# RECHERCHE DES MEILLEURS HYPERPARAMETRES D'UN MODELE (Optuna)
+# Un seul modèle ARCH par essai (pas d'agents) ; les meilleurs paramètres donnent ensuite
+# runs/best_hyperparams_<arch>_<dataset>/best_collab_vs_big.json pour construire K agents.
 # Une tâche = un dataset x un worker ; les workers d'un dataset partagent la même étude
 # (N_WORKERS x N_TRIALS essais au total par dataset).
 # 1 dataset x 8 workers = 8 tâches -> --array=0-7
 # À lancer depuis la racine du dépôt :  sbatch slurm/best_hyperparams.sh
 # Optuna n'est pas un module : « pip install --user optuna » une fois sur le nœud de connexion.
 # Relancer ajoute des essais à la recherche existante. Espace de recherche : configs/best_hyperparams.json
-# Sortie : runs/best_hyperparams_<arch>_<dataset>_x<K>[_<tag>]/ (best.json, best_config.json, trials.csv)
+# Sortie : runs/best_hyperparams_<arch>_<dataset>[_<tag>]/ (best.json, best_collab_vs_big.json, trials.csv)
 # =============================================================================
 DATASETS=("fashion_mnist")
 N_WORKERS=8
@@ -31,7 +33,7 @@ TASKS_PER_DATASET=$N_WORKERS
 # =============================================================================
 CONFIG="configs/best_hyperparams.json"
 ARCH="resnet20"
-NUM_AGENTS=3
+LOSS="ce"                    # ce, ou same_as_agents (L_k², échelle de gradient proche des agents)
 EPOCHS=20                    # époques par essai
 BATCH_SIZE=128
 TAG=""
@@ -48,7 +50,7 @@ if [ "$DATASET_IDX" -ge "$N_DATASETS" ]; then
 fi
 DATASET=${DATASETS[$DATASET_IDX]}
 
-ARGS=(--config "$CONFIG" --dataset "$DATASET" --arch "$ARCH" --num-agents "$NUM_AGENTS"
+ARGS=(--config "$CONFIG" --dataset "$DATASET" --arch "$ARCH" --loss "$LOSS"
       --epochs "$EPOCHS" --batch-size "$BATCH_SIZE" --n-workers "$N_WORKERS" --n-trials "$N_TRIALS")
 [ -n "$TAG" ] && ARGS+=(--tag "$TAG")
 

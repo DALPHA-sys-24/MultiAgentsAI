@@ -49,7 +49,7 @@ def test_tiny_study_runs_and_exports(tmp_path, tiny_data):
     from experiments.best_hyperparams import make_objective
 
     cfg = load_config(HyperparamSearchConfig, overrides={
-        "arch": TINY["archs"], "num_agents": 2, "epochs": 2, "batch_size": 16, "warmup_epochs": 0,
+        "arch": TINY["archs"], "epochs": 2, "batch_size": 16, "warmup_epochs": 0,
         "augment": False, "jit": False, "pruner": "none",
         "search_space": {"lr": {"type": "float", "low": 1e-3, "high": 1e-1, "log": True}}})
     study = create_study(str(tmp_path), "t", cfg.direction, "random", cfg.pruner, 0, 1, cfg.epochs)
@@ -60,3 +60,25 @@ def test_tiny_study_runs_and_exports(tmp_path, tiny_data):
     # une 2e étude sur le même dossier reprend les essais
     again = create_study(str(tmp_path), "t", cfg.direction, "random", cfg.pruner, 1, 1, cfg.epochs)
     assert len(again.trials) == 2
+
+
+def test_best_params_build_multi_agent_configs(tmp_path):
+    from dml.utils.config import AlphaSweepConfig, CollabVsBigConfig, config_from_dict
+    from experiments.best_hyperparams import multi_agent_config
+
+    cfg = load_config(HyperparamSearchConfig, overrides={"dataset": "fashion_mnist", "arch": "resnet32"})
+    best = {"lr": 0.004, "optimizer": "adamw", "weight_decay": 1e-4}
+    collab = config_from_dict(CollabVsBigConfig, multi_agent_config(CollabVsBigConfig, cfg, best))
+    assert (collab.small_arch, collab.dataset, collab.lr, collab.optimizer) == ("resnet32", "fashion_mnist", 0.004, "adamw")
+    collab3 = load_config(CollabVsBigConfig, overrides={**multi_agent_config(CollabVsBigConfig, cfg, best), "num_agents": 3})
+    assert collab3.run_name() == "collab_vs_big_resnet32_fashion_mnist_x3_best"
+    sweep = config_from_dict(AlphaSweepConfig, multi_agent_config(AlphaSweepConfig, cfg, best))
+    assert sweep.arch == "resnet32" and sweep.weight_decay == 1e-4
+
+
+def test_search_is_on_one_model():
+    cfg = load_config(HyperparamSearchConfig, "configs/best_hyperparams.json")
+    assert not hasattr(cfg, "alpha") and cfg.num_agents == 1
+    assert cfg.run_name() == "best_hyperparams_resnet20_fashion_mnist"
+    with pytest.raises(SystemExit, match="alpha"):
+        load_config(HyperparamSearchConfig, overrides={"search_space": {"alpha": {"type": "float", "low": 0, "high": 1}}})

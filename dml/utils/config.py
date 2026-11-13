@@ -74,15 +74,9 @@ def parse_jit(value):
 # =============================================================================
 
 @dataclass
-class TrainConfig:
-    """Réglages communs à toutes les expériences."""
+class BaseConfig:
+    """Réglages communs à toutes les expériences : données, entraînement, sorties."""
     dataset: str = opt("cifar10", "Jeu de données.", choices=available_datasets())
-
-    num_agents: int = opt(5, "Nombre d'agents K.")
-    loss_type: str = opt("global_interaction", "Loss multi-agents (losses.py).", choices=available_losses())
-    loss_form: str = opt("multiplicative", "L_k*(L_k + alpha*I_k) ou L_k + alpha*I_k.", choices=FORMS)
-    strategy: str = opt("simplicial", "Stratégie de consensus (consensus.py).", choices=available_strategies())
-    temperature: float = opt(1.0, "Température des poids de confiance w_k.")
 
     epochs: int = opt(200, "Nombre d'époques.")
     batch_size: int = opt(128, "Taille de batch.")
@@ -95,7 +89,6 @@ class TrainConfig:
         None, "Arguments en plus de l'optimiseur (JSON), ex. {\"global_clipnorm\": 1.0}.", kind="json")
     warmup_epochs: int = opt(5, "Époques de warmup linéaire du lr.")
     augment: bool = opt(True, "Random crop + flip.")
-    per_agent_views: bool = opt(False, "Une augmentation différente par agent.")
 
     val_size: int = opt(5000, "Taille de la validation, tirée du train.")
     train_subset: Optional[int] = opt(None, "N premiers exemples du train (tests rapides).", kind="int_or_none")
@@ -115,6 +108,8 @@ class TrainConfig:
     # Réglages qui peuvent changer entre deux lancements dans le même dossier de run
     # (ajouter des runs, des alphas...) sans mélanger deux expériences différentes.
     EXTENSIBLE = ("n_runs", "out_dir", "jit", "steps_per_execution", "checkpoint_every")
+
+    num_agents = 1                     # un seul modèle (redéfini par TrainConfig)
 
     # ------------------------------------------------------------------------
     def validate(self):
@@ -155,8 +150,10 @@ class TrainConfig:
         return getattr(self, "arch", None) or getattr(self, "small_arch")
 
     def run_name(self) -> str:
-        """<expérience>_<arch>_<dataset>_x<K>[_<tag>]"""
-        name = f"{self.EXPERIMENT}_{self.model_arch}_{self.dataset}_x{self.num_agents}"
+        """<expérience>_<arch>_<dataset>_x<K>[_<tag>] (sans _x<K> pour un seul modèle)"""
+        name = f"{self.EXPERIMENT}_{self.model_arch}_{self.dataset}"
+        if isinstance(self, TrainConfig):
+            name += f"_x{self.num_agents}"
         return f"{name}_{self.tag}" if self.tag else name
 
     def run_dir(self) -> str:
@@ -175,13 +172,24 @@ class TrainConfig:
             wd_exclude=DEFAULT_WD_EXCLUDE if self.wd_exclude_norm_bias else (),
             warmup_epochs=self.warmup_epochs,
             augment=self.augment,
-            form=self.loss_form,
+            form=getattr(self, "loss_form", "multiplicative"),
             eval_on=self.eval_on,
             checkpoint_every=self.checkpoint_every,
             steps_per_execution=self.steps_per_execution,
             jit_compile=parse_jit(self.jit),
             verbose=verbose,
         )
+
+
+@dataclass
+class TrainConfig(BaseConfig):
+    """Réglages des expériences à K agents entraînés ensemble."""
+    num_agents: int = opt(5, "Nombre d'agents K.")
+    loss_type: str = opt("global_interaction", "Loss multi-agents (losses.py).", choices=available_losses())
+    loss_form: str = opt("multiplicative", "L_k*(L_k + alpha*I_k) ou L_k + alpha*I_k.", choices=FORMS)
+    strategy: str = opt("simplicial", "Stratégie de consensus (consensus.py).", choices=available_strategies())
+    temperature: float = opt(1.0, "Température des poids de confiance w_k.")
+    per_agent_views: bool = opt(False, "Une augmentation différente par agent.")
 
 
 @dataclass
@@ -229,19 +237,25 @@ class AlphaSweepConfig(TrainConfig):
 DEFAULT_SEARCH_SPACE = {
     "lr": {"type": "float", "low": 1e-4, "high": 0.3, "log": True},
     "weight_decay": {"type": "float", "low": 1e-5, "high": 1e-2, "log": True},
-    "alpha": {"type": "float", "low": 0.0, "high": 50.0},
+    "optimizer": {"type": "categorical", "choices": ["sgd", "adam", "adamw"]},
 }
-SEARCH_METRICS = {"val_accuracy": "maximize", "val_agent_accuracy": "maximize", "val_loss": "minimize"}
+SEARCH_METRICS = {"val_accuracy": "maximize", "val_loss": "minimize"}
 SEARCH_SAMPLERS = ("tpe", "random", "cmaes")
 SEARCH_PRUNERS = ("median", "hyperband", "none")
 
 
 @dataclass
-class HyperparamSearchConfig(TrainConfig):
-    """Recherche des meilleurs hyperparamètres (Optuna) pour une architecture et un jeu de données."""
+class HyperparamSearchConfig(BaseConfig):
+    """
+    Recherche des meilleurs hyperparamètres (Optuna) d'UN modèle sur un jeu de données.
+    Les paramètres trouvés servent ensuite à construire K agents (best_collab_vs_big.json...).
+    """
     EXPERIMENT = "best_hyperparams"
-    arch: str = opt("resnet20", "Architecture des agents.")
-    alpha: float = opt(1.0, "Poids du terme d'interaction (si absent de search_space).")
+    arch: str = opt("resnet20", "Architecture du modèle.")
+    loss: str = opt("ce", "Loss du modèle : cross-entropy, ou même forme que les agents avec I_k = 0 "
+                          "(L_k² en multiplicatif, échelle de gradient proche de celle des agents).",
+                    choices=REFERENCE_LOSSES)
+    loss_form: str = opt("multiplicative", "Forme utilisée si loss = same_as_agents.", choices=FORMS)
     n_runs: int = opt(1, "Ignoré : chaque essai utilise la graine 0.")
     n_workers: int = opt(4, "Nombre de processus (tâches du job array) qui travaillent sur la même recherche.")
     epochs: int = opt(20, "Époques par essai.")
@@ -250,8 +264,8 @@ class HyperparamSearchConfig(TrainConfig):
     n_trials: int = opt(30, "Nombre d'essais par processus (au total : n_workers x n_trials).")
     timeout_hours: Optional[float] = opt(None, "Arrête de lancer de nouveaux essais après ce temps.",
                                          kind="float_or_none")
-    metric: str = opt("val_accuracy", "Critère : accuracy du consensus, accuracy moyenne des agents, "
-                                      "ou loss sur la validation.", choices=tuple(SEARCH_METRICS))
+    metric: str = opt("val_accuracy", "Critère : accuracy ou loss du modèle sur la validation.",
+                      choices=tuple(SEARCH_METRICS))
     sampler: str = opt("tpe", "Stratégie de tirage des essais.", choices=SEARCH_SAMPLERS)
     pruner: str = opt("median", "Arrêt précoce des essais mauvais.", choices=SEARCH_PRUNERS)
     pruner_warmup_epochs: int = opt(3, "Époques avant qu'un essai puisse être arrêté.")
@@ -259,7 +273,7 @@ class HyperparamSearchConfig(TrainConfig):
 
     SEARCH_FIELDS = ("search_space", "n_trials", "n_workers", "timeout_hours", "metric", "sampler", "pruner",
                      "pruner_warmup_epochs", "study_seed")
-    EXTENSIBLE = TrainConfig.EXTENSIBLE + ("n_trials", "n_workers", "timeout_hours", "study_seed")
+    EXTENSIBLE = BaseConfig.EXTENSIBLE + ("n_trials", "n_workers", "timeout_hours", "study_seed")
 
     @property
     def direction(self) -> str:
@@ -267,7 +281,7 @@ class HyperparamSearchConfig(TrainConfig):
 
     def searchable_fields(self) -> List[str]:
         return [f.name for f in dataclasses.fields(self)
-                if f.name not in self.SEARCH_FIELDS + ("out_dir", "tag", "n_runs")]
+                if f.name not in self.SEARCH_FIELDS + ("out_dir", "tag", "n_runs", "dataset", "arch")]
 
     def _extra_checks(self) -> List[str]:
         from dml.tuning.space import validate_space

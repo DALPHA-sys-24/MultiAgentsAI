@@ -260,6 +260,8 @@ def run_single_reference(data: Dict[str, Any], *, arch: str, **kwargs) -> Dict[s
     """
     kwargs.pop("num_agents", None)
     res = run_multi_experiment(data, archs=[arch], **kwargs)
+    if not kwargs.get("evaluate_test", True):
+        return res
     return {
         "arch": arch,
         "accuracy_reference": res["accuracy_agents"][0],
