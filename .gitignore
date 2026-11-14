@@ -1,20 +1,40 @@
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
 .ipynb_checkpoints/
 .pytest_cache/
 
 # Environnements
 .venv*/
 venv*/
+.env
 
 # Résultats et journaux (trop gros pour Git ; à sauvegarder à part)
 results/
+runs/
 slurm_logs/*
 !slurm_logs/.keep
+Logs/
+*.out
+*.err
+nohup.out
 *.npz
 *.npy
+*.png
+!notebooks/example_figures/*.png
 
-# Divers
+# Scripts et fichiers jetables
+show_old_results.py
+old_results.png
+
+# Éditeurs et système
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
+
+# Archives
 *.zip
