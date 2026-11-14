@@ -1,0 +1,73 @@
+{
+  "experiment": "best_hyperparams",
+  "dataset": "cifar10",
+  "epochs": 50,
+  "batch_size": 128,
+  "optimizer": "sgd",
+  "lr": 0.01,
+  "weight_decay": 0.0005,
+  "wd_exclude_norm_bias": true,
+  "optimizer_kwargs": null,
+  "warmup_epochs": 1,
+  "augment": true,
+  "val_size": 5000,
+  "train_subset": null,
+  "n_runs": 1,
+  "precision": "float32",
+  "jit": "auto",
+  "eval_on": "final",
+  "steps_per_execution": 8,
+  "checkpoint_every": 1,
+  "out_dir": "runs",
+  "tag": null,
+  "arch": "resnet20",
+  "loss": "ce",
+  "loss_form": "multiplicative",
+  "n_workers": 8,
+  "search_space": {
+    "lr": {
+      "type": "float",
+      "low": 0.0001,
+      "high": 0.3,
+      "log": true
+    },
+    "weight_decay": {
+      "type": "float",
+      "low": 1e-05,
+      "high": 0.01,
+      "log": true
+    },
+    "optimizer": {
+      "type": "categorical",
+      "choices": [
+        "sgd",
+        "adam",
+        "adamw"
+      ]
+    }
+  },
+  "n_trials": 10,
+  "timeout_hours": null,
+  "metric": "val_accuracy",
+  "sampler": "tpe",
+  "pruner": "median",
+  "pruner_warmup_epochs": 3,
+  "study_seed": 0,
+  "model_params": 272474,
+  "device": "gpu",
+  "environment": {
+    "git_commit": "358fae9426bb06d2fce2a5e30bb7a826ebaa9ff6",
+    "git_branch": "main",
+    "git_dirty": true,
+    "date": "2026-11-13T13:05:19",
+    "host": "ly-w105",
+    "python": "3.11.3",
+    "tensorflow": "2.15.1",
+    "keras": "2.15.0",
+    "numpy": "1.25.1",
+    "device": "gpu",
+    "slurm_job_id": "2053502",
+    "slurm_array_task_id": "7",
+    "command": "/home/users/j/k/jketchak/projet_ml/MultiAgentsAI/experiments/best_hyperparams.py --config configs/best_hyperparams.json --dataset cifar10 --arch resnet20 --loss ce --epochs 50 --batch-size 128 --n-workers 8 --n-trials 10 --task-index 7 --verbose 0"
+  }
+}

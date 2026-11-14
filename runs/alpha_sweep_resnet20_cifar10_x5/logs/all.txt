@@ -1,0 +1,14 @@
+2026-11-14 13:10:25,767 INFO    dml: [run] /mnt/c/Users/jketchak/Documents/DALPHAcommunity/UNAMUR/EUREKA/btwg_ml/MultiAgentsAI/runs/alpha_sweep_resnet20_cifar10_x5 | 1 tâche(s)
+2026-11-14 13:10:27,752 INFO    dml.utils.device: [device] GPU : NVIDIA GeForce RTX 4060 Laptop GPU | précision : float32
+2026-11-14 13:10:33,710 INFO    dml: [taille] 5 x resnet20 : 272,474 param. chacun
+2026-11-14 13:10:33,712 INFO    dml: [alphas] 1 (simplicial)
+2026-11-14 13:10:34,752 INFO    dml: === tâche a1_r0 {"alpha": 1.0, "run": 0, "seed": 0} ===
+2026-11-14 13:10:34,753 INFO    dml: alpha = 1 | 5 x resnet20 (global_interaction + simplicial) | graine 0
+2026-11-14 13:20:43,314 INFO    dml.evaluation.reporting: 
+===============================================================================================================================================
+5 x resnet20 | global_interaction | médiane [quantile 5 % ; quantile 95 %] sur les graines
+-----------------------------------------------------------------------------------------------------------------------------------------------
+alpha (strat.)                    Consensus           Moyenne simple          Agent (médiane)           Meilleur agent                Désaccord
+1 (simp)             0.8968 [0.8968;0.8968]   0.8968 [0.8968;0.8968]   0.8725 [0.8725;0.8725]   0.8759 [0.8759;0.8759]   0.1084 [0.1084;0.1084]
+===============================================================================================================================================
+2026-11-14 13:20:43,315 INFO    dml: Résultats : runs/alpha_sweep_resnet20_cifar10_x5

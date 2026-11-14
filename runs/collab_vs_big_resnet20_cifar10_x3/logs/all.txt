@@ -1,0 +1,21 @@
+2026-11-14 13:32:03,435 INFO    dml: [run] /mnt/c/Users/jketchak/Documents/DALPHAcommunity/UNAMUR/EUREKA/btwg_ml/MultiAgentsAI/runs/collab_vs_big_resnet20_cifar10_x3 | 2 tâche(s)
+2026-11-14 13:32:06,105 INFO    dml.utils.device: [device] GPU : NVIDIA GeForce RTX 4060 Laptop GPU | précision : float32
+2026-11-14 13:32:15,667 INFO    dml: [taille] petit agent : 272,474 param. | 3 agents : 817,422 | grand agent width=1.7344 : 820,347 (+0.36%)
+2026-11-14 13:32:17,066 INFO    dml: === tâche small_r0 {"part": "small", "run": 0, "seed": 0} ===
+2026-11-14 13:32:17,067 INFO    dml: 3 x resnet20 (global_interaction + simplicial, alpha=1), graine 0
+2026-11-14 13:38:17,584 INFO    dml: Aucun run complet pour l'instant (1 tâche(s) terminée(s)).
+2026-11-14 13:38:17,587 INFO    dml: === tâche big_r0 {"part": "big", "run": 0, "seed": 0} ===
+2026-11-14 13:38:17,588 INFO    dml: grand agent resnet20 width=1.7344 (cross-entropy, sgd), graine 0
+2026-11-14 13:42:18,317 INFO    dml.evaluation.reporting: 
+========================================================================================================
+3 x resnet20 (817,422 param.) vs grand agent width=1.7344 (820,347 param.) | 1 graine(s)
+médiane [quantile 5 % ; quantile 95 %] sur les graines
+--------------------------------------------------------------------------------------------------------
+                                               accuracy                      NLL                      ECE
+Grand agent seul                 0.8990 [0.8990;0.8990]   0.3273 [0.3273;0.3273]   0.0413 [0.0413;0.0413]
+Consensus des petits agents      0.8933 [0.8933;0.8933]   0.3239 [0.3239;0.3239]   0.0384 [0.0384;0.0384]
+Moyenne simple des petits        0.8934 [0.8934;0.8934]                        -                        -
+Petit agent (médiane)            0.8741 [0.8741;0.8741]   0.3692 [0.3692;0.3692]   0.0164 [0.0164;0.0164]
+Meilleur petit agent             0.8749 [0.8749;0.8749]                        -                        -
+========================================================================================================
+2026-11-14 13:42:18,318 INFO    dml: Résultats : runs/collab_vs_big_resnet20_cifar10_x3

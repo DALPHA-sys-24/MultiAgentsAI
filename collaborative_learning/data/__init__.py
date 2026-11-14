@@ -1,0 +1,10 @@
+"""
+Données.
+
+    datasets.py   chargement et normalisation, registre @register_dataset
+    pipelines.py  pipelines tf.data (mélange, augmentation, batchs)
+"""
+from collaborative_learning.data.datasets import available_datasets, download_dataset, load_dataset, register_dataset
+from collaborative_learning.data.pipelines import make_eval_dataset, make_train_dataset
+
+__all__ = ["available_datasets", "download_dataset", "load_dataset", "register_dataset", "make_eval_dataset", "make_train_dataset"]

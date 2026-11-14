@@ -3,18 +3,18 @@ Socle commun des expériences : dossier de run, découpage en tâches, fusion de
 
 Une expérience = une sous-classe de Experiment qui définit :
     tasks(cfg)                        la liste des tâches indépendantes (ex. un run = une graine)
-    prepare(cfg, data)                calculs communs à toutes les tâches (ex. largeur du grand agent)
-    run_task(task, cfg, data, ctx, part_dir, verbose)   une tâche ; renvoie un dict de résultats
-    merge(cfg, run_dir, parts)        rassemble les tâches terminées dans results.json
+    prepare(cfg, data)                calculs communs à toutes les tâches (ex. largeur du grand modèle)
+    run_task(task, cfg, data, ctx, task_dir, verbose)   une tâche ; renvoie un dict de résultats
+    merge(cfg, run_dir, tasks)        rassemble les tâches terminées dans results.json
 
-Organisation d'un dossier de run :
+Organisation des résultats (un dossier par expérience, puis par dataset, puis par variante) :
 
-    runs/<expérience>_<arch>_<dataset>_x<K>[_<tag>]/
-    ├── config.json          réglages, tailles des modèles, environnement (commit Git, versions)
-    ├── results.json         résumé sur les runs (médiane, quantiles 5 % / 95 %) et détail par run
-    ├── probs/               probabilités de test de chaque run (.npy), pour les notebooks
-    ├── parts/<tâche>/       une tâche : result.json, probs.npy, history.csv, checkpoint/
-    ├── logs/                journal de chaque processus
+    results/<expérience>/<dataset>/<arch>_<K>agents[_<tag>]/
+    ├── config.json             réglages, tailles des modèles, environnement (commit Git, versions)
+    ├── results.json            résumé sur les runs (médiane, quantiles 5 % / 95 %) et détail par run
+    ├── test_probabilities/     probabilités de test de chaque run (.npy), pour les notebooks
+    ├── tasks/<tâche>/          une tâche : result.json, test_probabilities.npy, history.csv, checkpoint/
+    └── logs/                   journal de chaque processus
 
 En local, toutes les tâches tournent l'une après l'autre. Sur le cluster, chaque tâche est
 une tâche du job array (--task-index), et toutes écrivent dans le même dossier. Une tâche
@@ -32,15 +32,22 @@ from typing import Any, Dict, List, Optional
 
 import tensorflow as tf
 
-from dml.data import download_dataset, load_dataset
-from dml.evaluation.reporting import write_json
-from dml.training.runner import cleanup
-from dml.utils.config import add_config_arguments, environment_info, load_config, overrides_from_args
-from dml.utils.device import configure_device, default_device
-from dml.utils.log import setup_logging
+from collaborative_learning.data import download_dataset, load_dataset
+from collaborative_learning.evaluation.reporting import write_json
+from collaborative_learning.training.runner import cleanup
+from collaborative_learning.utils.config import (add_config_arguments, config_from_dict, environment_info, load_config,
+                              overrides_from_args)
+from collaborative_learning.utils.device import configure_device, default_device
+from collaborative_learning.utils.log import setup_logging
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-log = logging.getLogger("dml")
+log = logging.getLogger("collaborative_learning")
+
+TASKS_DIR = "tasks"                          # un sous-dossier par tâche
+PROBA_DIR = "test_probabilities"             # probabilités de test rassemblées, une par run
+PROBA_FILE = "test_probabilities.npy"        # probabilités de test d'une tâche
+# anciens noms d'expériences (avant le 2026-11-14) : un dossier déplacé sous results/ reste lisible
+LEGACY_EXPERIMENT_NAMES = {"best_hyperparams": "hyperparameter_search"}
 
 
 def copy_atomic(src: str, dst: str) -> None:
@@ -68,7 +75,7 @@ def normalize_flags(argv: List[str]) -> List[str]:
 @dataclass
 class Task:
     """Une unité de travail indépendante (un run, une valeur de alpha, un worker de recherche...)."""
-    id: str                                   # nom du dossier parts/<id>
+    id: str                                   # nom du dossier tasks/<id>
     params: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -76,7 +83,7 @@ class Experiment:
     NAME = "experiment"
     CONFIG_CLS = None
     DESCRIPTION = ""
-    USES_PARTS = True          # False : les tâches n'écrivent pas dans parts/ (ex. workers Optuna)
+    WRITES_TASK_DIR = True     # False : les tâches n'écrivent pas dans tasks/ (ex. workers Optuna)
 
     # --- à définir dans chaque expérience ------------------------------------
     def tasks(self, cfg) -> List[Task]:
@@ -86,21 +93,21 @@ class Experiment:
         """Infos communes aux tâches, enregistrées dans config.json."""
         return {}
 
-    def run_task(self, task: Task, cfg, data, ctx: Dict[str, Any], part_dir: str, verbose: int) -> Dict[str, Any]:
+    def run_task(self, task: Task, cfg, data, ctx: Dict[str, Any], task_dir: str, verbose: int) -> Dict[str, Any]:
         raise NotImplementedError
 
-    def merge(self, cfg, run_dir: str, parts: Dict[str, Dict[str, Any]]) -> None:
+    def merge(self, cfg, run_dir: str, tasks: Dict[str, Dict[str, Any]]) -> None:
         raise NotImplementedError
 
-    def is_done(self, part_dir: str) -> bool:
-        return os.path.exists(os.path.join(part_dir, "result.json"))
+    def is_done(self, task_dir: str) -> bool:
+        return os.path.exists(os.path.join(task_dir, "result.json"))
 
     # --- ligne de commande ---------------------------------------------------
     def parse_args(self, argv=None):
         p = argparse.ArgumentParser(description=self.DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
         p.add_argument("--config", help=f"Fichier de config JSON (défaut : configs/{self.NAME}.json).")
         p.add_argument("--run-dir", metavar="DOSSIER",
-                       help="Dossier du run (défaut : <out_dir>/<expérience>_<arch>_<dataset>_x<K>[_<tag>]).")
+                       help="Dossier du run (défaut : <out_dir>/<expérience>/<dataset>/<arch>_<K>agents[_<tag>]).")
         p.add_argument("--task-index", type=int, metavar="I",
                        help="N'exécute que la tâche I (job array SLURM : $SLURM_ARRAY_TASK_ID).")
         p.add_argument("--list-tasks", action="store_true",
@@ -126,6 +133,8 @@ class Experiment:
             return
         with open(path) as f:
             saved = json.load(f)
+        if "experiment" in saved:
+            saved["experiment"] = LEGACY_EXPERIMENT_NAMES.get(saved["experiment"], saved["experiment"])
         current = cfg.signature()
         diffs = [f"{k} : {saved[k]!r} (dossier) -> {v!r} (maintenant)"
                  for k, v in current.items() if k in saved and saved[k] != v]
@@ -138,12 +147,18 @@ class Experiment:
 
     @staticmethod
     def write_config(cfg, run_dir: str, **extra) -> None:
-        """config.json : réglages actuels ; n_runs / alphas étendus si le dossier en avait plus."""
+        """
+        config.json : réglages actuels ; n_runs / alphas / grand modèle étendus si le dossier en avait
+        plus, et infos des lancements précédents gardées (ex. taille du grand modèle).
+        """
         path = os.path.join(run_dir, "config.json")
         payload = {**cfg.to_dict(), **extra}
         if os.path.exists(path):
             with open(path) as f:
                 saved = json.load(f)
+            payload = {**{k: v for k, v in saved.items() if k not in payload}, **payload}
+            if saved.get("big_model") is True and "big_model" in payload:
+                payload["big_model"] = True
             if isinstance(saved.get("n_runs"), int):
                 payload["n_runs"] = max(saved["n_runs"], payload.get("n_runs") or 0)
             if isinstance(saved.get("alphas"), list) and "alphas" in payload:
@@ -151,17 +166,18 @@ class Experiment:
         write_json(path, payload)
 
     @staticmethod
-    def read_parts(run_dir: str) -> Dict[str, Dict[str, Any]]:
-        parts = {}
-        parts_dir = os.path.join(run_dir, "parts")
-        if not os.path.isdir(parts_dir):
-            return parts
-        for name in sorted(os.listdir(parts_dir)):
-            path = os.path.join(parts_dir, name, "result.json")
+    def read_finished_tasks(run_dir: str) -> Dict[str, Dict[str, Any]]:
+        """Résultats (result.json) des tâches terminées, par identifiant de tâche."""
+        done = {}
+        tasks_dir = os.path.join(run_dir, TASKS_DIR)
+        if not os.path.isdir(tasks_dir):
+            return done
+        for name in sorted(os.listdir(tasks_dir)):
+            path = os.path.join(tasks_dir, name, "result.json")
             if os.path.exists(path):
                 with open(path) as f:
-                    parts[name] = json.load(f)
-        return parts
+                    done[name] = json.load(f)
+        return done
 
     # --- exécution -----------------------------------------------------------
     def main(self, argv=None):
@@ -179,6 +195,13 @@ class Experiment:
             print(f"TASKS {len(tasks)} {run_dir}")
             return
 
+        saved_path = os.path.join(run_dir, "config.json")
+        if args.merge_only and os.path.exists(saved_path):
+            # fusion : réglages enregistrés dans le dossier (pas besoin de redonner les mêmes options)
+            with open(saved_path) as f:
+                cfg = config_from_dict(self.CONFIG_CLS, json.load(f), strict=False).validate()
+            path = saved_path
+            tasks = self.tasks(cfg)
         log.info("[config] %s", os.path.abspath(path) if path else "aucun fichier, valeurs par défaut")
         self.check_run_dir(cfg, run_dir)
         os.makedirs(run_dir, exist_ok=True)
@@ -197,7 +220,7 @@ class Experiment:
             selected = [tasks[args.task_index]]
         else:
             selected = tasks
-        todo = [t for t in selected if not self.is_done(os.path.join(run_dir, "parts", t.id))]
+        todo = [t for t in selected if not self.is_done(os.path.join(run_dir, TASKS_DIR, t.id))]
         if not todo:
             log.info("Tout est déjà terminé.")
             self._merge(cfg, run_dir)
@@ -213,21 +236,21 @@ class Experiment:
 
         with tf.device(default_device()):
             for task in todo:
-                part_dir = os.path.join(run_dir, "parts", task.id)
-                if self.USES_PARTS:
-                    os.makedirs(part_dir, exist_ok=True)
+                task_dir = os.path.join(run_dir, TASKS_DIR, task.id)
+                if self.WRITES_TASK_DIR:
+                    os.makedirs(task_dir, exist_ok=True)
                 log.info("=== tâche %s %s ===", task.id, json.dumps(task.params))
                 t0 = time.time()
-                result = self.run_task(task, cfg, data, ctx, part_dir, args.verbose)
+                result = self.run_task(task, cfg, data, ctx, task_dir, args.verbose)
                 cleanup()  # libère les modèles (sinon la RAM grossit à chaque tâche)
                 if result is not None:
-                    write_json(os.path.join(part_dir, "result.json"),
+                    write_json(os.path.join(task_dir, "result.json"),
                                {"task": task.id, **task.params, **result, "task_time_s": time.time() - t0})
                 self._merge(cfg, run_dir)   # résultats à jour après chaque tâche
         log.info("Résultats : %s", run_dir)
 
     def _merge(self, cfg, run_dir: str) -> None:
         try:
-            self.merge(cfg, run_dir, self.read_parts(run_dir))
+            self.merge(cfg, run_dir, self.read_finished_tasks(run_dir))
         except Exception:  # une fusion ratée ne doit pas faire échouer la tâche : le job de fusion refera le travail
             log.exception("Fusion des résultats impossible pour l'instant")

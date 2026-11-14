@@ -4,14 +4,14 @@ import json
 import pytest
 
 from conftest import TINY
-from dml.tuning.space import decode_params, validate_space
-from dml.utils.config import HyperparamSearchConfig, load_config
+from collaborative_learning.tuning.space import decode_params, validate_space
+from collaborative_learning.utils.config import HyperparamSearchConfig, load_config
 
 optuna = pytest.importorskip("optuna")
 
 
 def test_shipped_config_loads():
-    cfg = load_config(HyperparamSearchConfig, "configs/best_hyperparams.json")
+    cfg = load_config(HyperparamSearchConfig, "configs/hyperparameter_search.json")
     assert cfg.direction == "maximize"
 
 
@@ -29,7 +29,7 @@ def test_unknown_search_key_refused():
 
 
 def test_suggest_and_decode_dict_choices():
-    from dml.tuning.space import suggest
+    from collaborative_learning.tuning.space import suggest
     space = {"lr": {"type": "float", "low": 1e-3, "high": 1e-1, "log": True},
              "optimizer_kwargs": {"type": "categorical", "choices": [None, {"global_clipnorm": 1.0}]}}
     study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
@@ -45,8 +45,8 @@ def test_suggest_and_decode_dict_choices():
 
 
 def test_tiny_study_runs_and_exports(tmp_path, tiny_data):
-    from dml.tuning.study import create_study, export_results
-    from experiments.best_hyperparams import make_objective
+    from collaborative_learning.tuning.study import create_study, export_results
+    from experiments.hyperparameter_search import make_objective
 
     cfg = load_config(HyperparamSearchConfig, overrides={
         "arch": TINY["archs"], "epochs": 2, "batch_size": 16, "warmup_epochs": 0,
@@ -62,23 +62,22 @@ def test_tiny_study_runs_and_exports(tmp_path, tiny_data):
     assert len(again.trials) == 2
 
 
-def test_best_params_build_multi_agent_configs(tmp_path):
-    from dml.utils.config import AlphaSweepConfig, CollabVsBigConfig, config_from_dict
-    from experiments.best_hyperparams import multi_agent_config
+def test_best_params_build_multi_agent_config(tmp_path):
+    from collaborative_learning.utils.config import CollaborationConfig, config_from_dict
+    from experiments.hyperparameter_search import multi_agent_config
 
     cfg = load_config(HyperparamSearchConfig, overrides={"dataset": "fashion_mnist", "arch": "resnet32"})
     best = {"lr": 0.004, "optimizer": "adamw", "weight_decay": 1e-4}
-    collab = config_from_dict(CollabVsBigConfig, multi_agent_config(CollabVsBigConfig, cfg, best))
-    assert (collab.small_arch, collab.dataset, collab.lr, collab.optimizer) == ("resnet32", "fashion_mnist", 0.004, "adamw")
-    collab3 = load_config(CollabVsBigConfig, overrides={**multi_agent_config(CollabVsBigConfig, cfg, best), "num_agents": 3})
-    assert collab3.run_name() == "collab_vs_big_resnet32_fashion_mnist_x3_best"
-    sweep = config_from_dict(AlphaSweepConfig, multi_agent_config(AlphaSweepConfig, cfg, best))
-    assert sweep.arch == "resnet32" and sweep.weight_decay == 1e-4
+    tuned = config_from_dict(CollaborationConfig, multi_agent_config(cfg, best))
+    assert (tuned.arch, tuned.dataset, tuned.lr, tuned.optimizer, tuned.weight_decay) == \
+        ("resnet32", "fashion_mnist", 0.004, "adamw", 1e-4)
+    tuned3 = load_config(CollaborationConfig, overrides={**multi_agent_config(cfg, best), "num_agents": 3})
+    assert tuned3.run_name() == "collaboration/fashion_mnist/resnet32_3agents_tuned"
 
 
 def test_search_is_on_one_model():
-    cfg = load_config(HyperparamSearchConfig, "configs/best_hyperparams.json")
+    cfg = load_config(HyperparamSearchConfig, "configs/hyperparameter_search.json")
     assert not hasattr(cfg, "alpha") and cfg.num_agents == 1
-    assert cfg.run_name() == "best_hyperparams_resnet20_fashion_mnist"
+    assert cfg.run_name() == "hyperparameter_search/fashion_mnist/resnet20"
     with pytest.raises(SystemExit, match="alpha"):
         load_config(HyperparamSearchConfig, overrides={"search_space": {"alpha": {"type": "float", "low": 0, "high": 1}}})

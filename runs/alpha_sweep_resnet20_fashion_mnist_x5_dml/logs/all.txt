@@ -1,0 +1,29 @@
+2026-11-13 11:53:04,598 INFO    dml: [run] /mnt/c/Users/jketchak/Documents/DALPHAcommunity/UNAMUR/EUREKA/btwg_ml/MultiAgentsAI/runs/alpha_sweep_resnet20_fashion_mnist_x5_dml | 1 tâche(s)
+2026-11-13 11:53:06,032 INFO    dml.utils.device: [device] GPU : NVIDIA GeForce RTX 4060 Laptop GPU | précision : float32
+2026-11-13 11:53:09,064 INFO    dml: [taille] 5 x resnet20 : 272,186 param. chacun
+2026-11-13 11:53:09,066 INFO    dml: [alphas] 1 (simplicial)
+2026-11-13 11:53:10,437 INFO    dml: === tâche a1_r0 {"alpha": 1.0, "run": 0, "seed": 0} ===
+2026-11-13 11:53:10,438 INFO    dml: alpha = 1 | 5 x resnet20 (dml + simplicial) | graine 0
+2026-11-13 11:58:40,375 INFO    dml.evaluation.reporting: 
+===============================================================================================================================================
+5 x resnet20 | dml | médiane [quantile 5 % ; quantile 95 %] sur les graines
+-----------------------------------------------------------------------------------------------------------------------------------------------
+alpha (strat.)                    Consensus           Moyenne simple          Agent (médiane)           Meilleur agent                Désaccord
+1 (simp)             0.9087 [0.9087;0.9087]   0.9088 [0.9088;0.9088]   0.9041 [0.9041;0.9041]   0.9061 [0.9061;0.9061]   0.0445 [0.0445;0.0445]
+===============================================================================================================================================
+2026-11-13 11:58:40,375 INFO    dml: Résultats : runs/alpha_sweep_resnet20_fashion_mnist_x5_dml
+2026-11-13 12:21:15,823 INFO    dml: [run] /mnt/c/Users/jketchak/Documents/DALPHAcommunity/UNAMUR/EUREKA/btwg_ml/MultiAgentsAI/runs/alpha_sweep_resnet20_fashion_mnist_x5_dml | 1 tâche(s)
+2026-11-13 12:21:17,158 INFO    dml.utils.device: [device] GPU : NVIDIA GeForce RTX 4060 Laptop GPU | précision : float32
+2026-11-13 12:21:20,498 INFO    dml: [taille] 5 x resnet20 : 272,186 param. chacun
+2026-11-13 12:21:20,500 INFO    dml: [alphas] 50 (simplicial)
+2026-11-13 12:21:21,576 INFO    dml: === tâche a50_r0 {"alpha": 50.0, "run": 0, "seed": 0} ===
+2026-11-13 12:21:21,577 INFO    dml: alpha = 50 | 5 x resnet20 (dml + simplicial) | graine 0
+2026-11-13 12:27:05,379 INFO    dml.evaluation.reporting: 
+===============================================================================================================================================
+5 x resnet20 | dml | médiane [quantile 5 % ; quantile 95 %] sur les graines
+-----------------------------------------------------------------------------------------------------------------------------------------------
+alpha (strat.)                    Consensus           Moyenne simple          Agent (médiane)           Meilleur agent                Désaccord
+1 (simp)             0.9087 [0.9087;0.9087]   0.9088 [0.9088;0.9088]   0.9041 [0.9041;0.9041]   0.9061 [0.9061;0.9061]   0.0445 [0.0445;0.0445]
+50 (simp)            0.8066 [0.8066;0.8066]   0.8064 [0.8064;0.8064]   0.8068 [0.8068;0.8068]   0.8070 [0.8070;0.8070]   0.0142 [0.0142;0.0142]
+===============================================================================================================================================
+2026-11-13 12:27:05,380 INFO    dml: Résultats : runs/alpha_sweep_resnet20_fashion_mnist_x5_dml

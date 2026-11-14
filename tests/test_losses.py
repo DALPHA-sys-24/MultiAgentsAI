@@ -3,9 +3,9 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
-from dml.core import losses as loss_lib
+from collaborative_learning.core import losses as loss_lib
 from conftest import TINY
-from dml.core.multiagent import LOSS_FUNCTIONS, MultiAgentModel
+from collaborative_learning.core.multiagent import LOSS_FUNCTIONS, MultiAgentModel
 
 ALL_LOSSES = list(LOSS_FUNCTIONS)
 

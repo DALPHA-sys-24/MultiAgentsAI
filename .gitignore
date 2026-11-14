@@ -9,9 +9,9 @@ __pycache__/
 venv*/
 
 # Résultats et journaux (trop gros pour Git ; à sauvegarder à part)
-runs/
-Logs/*
-!Logs/.keep
+results/
+slurm_logs/*
+!slurm_logs/.keep
 *.npz
 *.npy
 

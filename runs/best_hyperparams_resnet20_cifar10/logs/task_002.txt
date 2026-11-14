@@ -1,0 +1,168 @@
+2026-11-13 12:47:44,586 INFO    dml: [run] /home/users/j/k/jketchak/projet_ml/MultiAgentsAI/runs/best_hyperparams_resnet20_cifar10 | 8 tâche(s)
+2026-11-13 12:47:44,714 INFO    dml.utils.device: [device] GPU : NVIDIA RTX 6000 Ada Generation | précision : float32
+2026-11-13 12:47:47,002 INFO    dml: [taille] 1 x resnet20 : 272,474 param. | cifar10 | loss ce | critère : val_accuracy (maximize)
+2026-11-13 12:47:47,003 INFO    dml: [espace] {"lr": {"type": "float", "low": 0.0001, "high": 0.3, "log": true}, "weight_decay": {"type": "float", "low": 1e-05, "high": 0.01, "log": true}, "optimizer": {"type": "categorical", "choices": ["sgd", "adam", "adamw"]}}
+2026-11-13 12:47:47,108 INFO    dml: === tâche w2 {"worker": 2} ===
+2026-11-13 12:47:47,592 INFO    dml: [reprise] 4 essai(s) déjà dans l'étude
+2026-11-13 12:47:47,614 INFO    dml: [essai 4] {"lr": 0.003281006880912451, "weight_decay": 1.1961308606153198e-05, "optimizer": "sgd"}
+2026-11-13 12:50:09,896 INFO    dml: [essai 4] val_accuracy = 0.8059 (époque 47)
+2026-11-13 12:50:10,410 INFO    dml: Meilleurs essais (val_accuracy, 5 terminés / 7 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:50:10,412 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:50:10,412 INFO    dml: Importance des hyperparamètres : optimizer 0.68, weight_decay 0.19, lr 0.13
+2026-11-13 12:50:10,413 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:50:10,437 INFO    dml: [essai 7] {"lr": 0.0014080375189423433, "weight_decay": 4.110985094345333e-05, "optimizer": "sgd"}
+2026-11-13 12:50:32,360 INFO    dml: [essai 7] arrêté à l'époque 4 (val_accuracy = 0.46345359086990356)
+2026-11-13 12:50:32,457 INFO    dml: Meilleurs essais (val_accuracy, 5 terminés / 10 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:50:32,459 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:50:32,459 INFO    dml: Importance des hyperparamètres : optimizer 0.68, weight_decay 0.19, lr 0.13
+2026-11-13 12:50:32,459 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:50:32,485 INFO    dml: [essai 10] {"lr": 0.014446334013174151, "weight_decay": 0.0003867464027059847, "optimizer": "adam"}
+2026-11-13 12:52:52,140 INFO    dml: [essai 10] val_accuracy = 0.9006 (époque 50)
+2026-11-13 12:52:52,254 INFO    dml: Meilleurs essais (val_accuracy, 6 terminés / 20 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:52:52,256 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:52:52,256 INFO    dml: Importance des hyperparamètres : optimizer 0.68, weight_decay 0.19, lr 0.14
+2026-11-13 12:52:52,256 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:52:52,291 INFO    dml: [essai 20] {"lr": 0.001438787204680712, "weight_decay": 0.00013053248358603324, "optimizer": "adam"}
+2026-11-13 12:53:14,828 INFO    dml: [essai 20] arrêté à l'époque 4 (val_accuracy = 0.708708643913269)
+2026-11-13 12:53:14,933 INFO    dml: Meilleurs essais (val_accuracy, 6 terminés / 22 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:53:14,934 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:53:14,935 INFO    dml: Importance des hyperparamètres : optimizer 0.68, weight_decay 0.19, lr 0.14
+2026-11-13 12:53:14,935 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:53:14,965 INFO    dml: [essai 22] {"lr": 0.0010270232845771632, "weight_decay": 0.0072519265793251145, "optimizer": "sgd"}
+2026-11-13 12:53:36,799 INFO    dml: [essai 22] arrêté à l'époque 4 (val_accuracy = 0.44770222902297974)
+2026-11-13 12:53:36,905 INFO    dml: Meilleurs essais (val_accuracy, 6 terminés / 24 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:53:36,907 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:53:36,907 INFO    dml: Importance des hyperparamètres : optimizer 0.68, weight_decay 0.19, lr 0.14
+2026-11-13 12:53:36,907 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:53:36,932 INFO    dml: [essai 24] {"lr": 0.08865685517751731, "weight_decay": 0.0007180046656292936, "optimizer": "sgd"}
+2026-11-13 12:54:42,086 INFO    dml: [essai 24] arrêté à l'époque 21 (val_accuracy = 0.8597656488418579)
+2026-11-13 12:54:42,206 INFO    dml: Meilleurs essais (val_accuracy, 7 terminés / 28 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #16   0.9022  lr=0.00476  weight_decay=8.5e-05  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:54:42,208 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:54:42,208 INFO    dml: Importance des hyperparamètres : optimizer 0.76, lr 0.13, weight_decay 0.12
+2026-11-13 12:54:42,208 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:54:42,243 INFO    dml: [essai 28] {"lr": 0.008480601808457727, "weight_decay": 2.0585159645873436e-05, "optimizer": "adamw"}
+2026-11-13 12:57:01,977 INFO    dml: [essai 28] val_accuracy = 0.9040 (époque 47)
+2026-11-13 12:57:02,099 INFO    dml: Meilleurs essais (val_accuracy, 8 terminés / 34 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #28   0.9040  lr=0.00848  weight_decay=2.06e-05  optimizer=adamw
+  #16   0.9022  lr=0.00476  weight_decay=8.5e-05  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:57:02,100 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:57:02,100 INFO    dml: Importance des hyperparamètres : optimizer 0.74, weight_decay 0.17, lr 0.09
+2026-11-13 12:57:02,100 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:57:02,131 INFO    dml: [essai 34] {"lr": 0.05134446413003612, "weight_decay": 3.3718425719757425e-05, "optimizer": "adamw"}
+2026-11-13 12:57:24,754 INFO    dml: [essai 34] arrêté à l'époque 4 (val_accuracy = 0.7148207426071167)
+2026-11-13 12:57:24,872 INFO    dml: Meilleurs essais (val_accuracy, 8 terminés / 35 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #28   0.9040  lr=0.00848  weight_decay=2.06e-05  optimizer=adamw
+  #16   0.9022  lr=0.00476  weight_decay=8.5e-05  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:57:24,874 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:57:24,874 INFO    dml: Importance des hyperparamètres : optimizer 0.74, weight_decay 0.17, lr 0.09
+2026-11-13 12:57:24,874 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:57:24,901 INFO    dml: [essai 35] {"lr": 0.004294801472635073, "weight_decay": 1.7067979989333485e-05, "optimizer": "adamw"}
+2026-11-13 12:57:52,273 INFO    dml: [essai 35] arrêté à l'époque 6 (val_accuracy = 0.7413603067398071)
+2026-11-13 12:57:52,392 INFO    dml: Meilleurs essais (val_accuracy, 8 terminés / 37 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #28   0.9040  lr=0.00848  weight_decay=2.06e-05  optimizer=adamw
+  #16   0.9022  lr=0.00476  weight_decay=8.5e-05  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:57:52,394 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:57:52,394 INFO    dml: Importance des hyperparamètres : optimizer 0.74, weight_decay 0.17, lr 0.09
+2026-11-13 12:57:52,394 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:57:52,420 INFO    dml: [essai 37] {"lr": 0.004425550780707853, "weight_decay": 5.443043487694551e-05, "optimizer": "adamw"}
+2026-11-13 12:58:14,739 INFO    dml: [essai 37] arrêté à l'époque 4 (val_accuracy = 0.7233341336250305)
+2026-11-13 12:58:14,865 INFO    dml: Meilleurs essais (val_accuracy, 8 terminés / 38 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #28   0.9040  lr=0.00848  weight_decay=2.06e-05  optimizer=adamw
+  #16   0.9022  lr=0.00476  weight_decay=8.5e-05  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:58:14,867 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:58:14,867 INFO    dml: Importance des hyperparamètres : optimizer 0.74, weight_decay 0.17, lr 0.09
+2026-11-13 12:58:14,867 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:58:15,401 INFO    dml: Meilleurs essais (val_accuracy, 8 terminés / 38 lancés) :
+  #3    0.9044  lr=0.0566  weight_decay=0.000386  optimizer=adam
+  #28   0.9040  lr=0.00848  weight_decay=2.06e-05  optimizer=adamw
+  #16   0.9022  lr=0.00476  weight_decay=8.5e-05  optimizer=adam
+  #10   0.9006  lr=0.0144  weight_decay=0.000387  optimizer=adam
+  #1    0.8993  lr=0.0176  weight_decay=0.000205  optimizer=adam
+  #2    0.8947  lr=0.00282  weight_decay=0.00145  optimizer=adam
+  #0    0.8547  lr=0.0081  weight_decay=0.0014  optimizer=sgd
+  #4    0.8059  lr=0.00328  weight_decay=1.2e-05  optimizer=sgd
+2026-11-13 12:58:15,403 INFO    dml: Meilleur essai #3 : val_accuracy = 0.9044 avec {"lr": 0.056614015283581016, "weight_decay": 0.0003860866271460546, "optimizer": "adam"}
+2026-11-13 12:58:15,403 INFO    dml: Importance des hyperparamètres : optimizer 0.64, weight_decay 0.21, lr 0.14
+2026-11-13 12:58:15,403 INFO    dml: Construire K agents avec ces paramètres :
+  python -m experiments.collab_vs_big --config runs/best_hyperparams_resnet20_cifar10/best_collab_vs_big.json --num-agents <K>
+  python -m experiments.alpha_sweep --config runs/best_hyperparams_resnet20_cifar10/best_alpha_sweep.json --num-agents <K>
+2026-11-13 12:58:15,403 INFO    dml: Résultats : runs/best_hyperparams_resnet20_cifar10

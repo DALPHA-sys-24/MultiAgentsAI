@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
-from dml.training.checkpoint import TrainingCheckpoint
+from collaborative_learning.training.checkpoint import TrainingCheckpoint
 from conftest import TINY
-from dml.training.runner import run_multi_experiment
-from dml.core.multiagent import MultiAgentModel
-from dml.training.optimizers import build_agent_optimizers
+from collaborative_learning.training.runner import run_multi_experiment
+from collaborative_learning.core.multiagent import MultiAgentModel
+from collaborative_learning.training.optimizers import build_agent_optimizers
 
 
 def _weights(model):

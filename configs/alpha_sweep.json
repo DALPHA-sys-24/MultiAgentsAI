@@ -19,7 +19,7 @@
   "optimizer": "sgd",
   "lr": 0.01,
   "weight_decay": 0.0005,
-  "wd_exclude_norm_bias": true,
+  "wd_exclude_norm_bias": false,
   "optimizer_kwargs": null,
   "warmup_epochs": 5,
   "augment": true,
