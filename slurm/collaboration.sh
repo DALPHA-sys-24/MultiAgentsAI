@@ -22,7 +22,7 @@
 # =============================================================================
 DATASETS=("fashion_mnist" "cifar10")
 N_RUNS=5                     # graines 0, 1, ..., N_RUNS-1
-ALPHAS=(0 1 10)              # alpha = 0 : agents indépendants, consensus par vote majoritaire
+ALPHAS=(0 1 10)              # alpha = 0 : agents indépendants (cross-entropy classique), vote majoritaire
 
 METHODS=(                    # une méthode par ligne : "loss_type:forme:tag:grand modèle (1/0)" (tag = suffixe du dossier)
     "global_interaction:multiplicative::1"   # ta méthode, + le grand modèle (entraîné une seule fois, ici)

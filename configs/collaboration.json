@@ -1,5 +1,5 @@
 {
-  "_note": "Une seule expérience : K agents pour chaque alpha de 'alphas' (une valeur = run simple, plusieurs = balayage ; alpha = 0 : agents indépendants, vote majoritaire). big_model = true ajoute le grand modèle au même nombre de paramètres (big_* : ses réglages, null = ceux des agents).",
+  "_note": "Une seule expérience : K agents pour chaque alpha de 'alphas' (une valeur = run simple, plusieurs = balayage ; alpha = 0 : agents indépendants en cross-entropy classique, vote majoritaire). big_model = true ajoute le grand modèle au même nombre de paramètres (big_* : ses réglages, null = ceux des agents).",
   "dataset": "cifar10",
   "arch": "resnet20",
   "num_agents": 5,

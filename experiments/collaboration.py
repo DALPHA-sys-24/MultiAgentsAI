@@ -5,8 +5,10 @@ Les K agents (même architecture) sont entraînés avec la loss multi-agents
 (par défaut L_k * (L_k + alpha * I_k)) pour chaque valeur de alpha de la liste `alphas` :
     - une seule valeur (--alphas 1) : un run simple ;
     - plusieurs valeurs (--alphas 0 1 10) : un balayage de alpha ;
-    - alpha = 0 : pas d'interaction, chaque agent est entraîné seul ; le consensus est un vote
-      majoritaire (strategy = "majority") ; sinon la stratégie de la config (par défaut "simplicial").
+    - alpha = 0 : agents indépendants : chaque agent est entraîné seul en cross-entropy classique
+      (loss "independent", forme additive), et le consensus est un vote majoritaire ("majority") ;
+    - alpha > 0 : la loss, la forme et la stratégie de la config (par défaut global_interaction,
+      multiplicative, simplicial).
 
 Avec --big-model true, on entraîne aussi un grand modèle seul : la même architecture élargie
 (width) pour avoir autant de paramètres que les K agents réunis. Sa loss est la cross-entropy
@@ -37,7 +39,7 @@ from collaborative_learning.evaluation.metrics import disagreement
 from collaborative_learning.evaluation.reporting import (print_collab_table, print_sweep_table, summarize, summary_by_alpha,
                                       summary_collab, write_json)
 from collaborative_learning.training.runner import count_trainable_params, match_width, run_multi_experiment, run_single_reference
-from collaborative_learning.utils.config import STRATEGY_NO_INTERACTION, CollaborationConfig
+from collaborative_learning.utils.config import CollaborationConfig
 from experiments.common import PROBA_DIR, PROBA_FILE, TASKS_DIR, Experiment, Task, copy_atomic, log
 
 AGENTS, BIG_MODEL = "agents", "big_model"
@@ -62,8 +64,10 @@ class Collaboration(Experiment):
         shape, num_classes = data["input_shape"], data["num_classes"]
         params = count_trainable_params(cfg.arch, shape, num_classes)
         log.info("[taille] %d x %s : %s param. chacun", cfg.num_agents, cfg.arch, f"{params:,}")
-        log.info("[alphas] %s", ", ".join(f"{a:g} ({cfg.strategy_for(a)})" for a in cfg.alphas))
-        ctx = {"agent_params": params, "strategy_alpha0": STRATEGY_NO_INTERACTION}
+        for a in cfg.alphas:
+            s = cfg.setup_for(a)
+            log.info("[alpha = %g] loss %s (%s), consensus %s", a, s["loss_type"], s["loss_form"], s["strategy"])
+        ctx = {"agent_params": params, "setup_alpha0": cfg.setup_for(0.0)}
         if cfg.big_model:
             # Largeur du grand modèle : autant de paramètres que les K agents réunis
             target = cfg.num_agents * params
@@ -87,20 +91,24 @@ class Collaboration(Experiment):
             return self._run_big_model(cfg, data, ctx, seed, paths, task_dir, verbose)
 
         alpha = task.params["alpha"]
-        strategy = cfg.strategy_for(alpha)
-        log.info("alpha = %g | %d x %s (%s + %s) | graine %d", alpha, cfg.num_agents, cfg.arch,
-                 cfg.loss_type, strategy, seed)
+        setup = cfg.setup_for(alpha)          # alpha = 0 : independent (CE) + majority
+        strategy = setup["strategy"]
+        log.info("alpha = %g | %d x %s (%s %s + %s) | graine %d", alpha, cfg.num_agents, cfg.arch,
+                 setup["loss_type"], setup["loss_form"], strategy, seed)
+        train = {**cfg.train_kwargs(verbose), "form": setup["loss_form"]}
         res = run_multi_experiment(
             data, archs=cfg.arch, num_agents=cfg.num_agents, seed=seed,
-            loss_type=cfg.loss_type, strategy=strategy, alpha=alpha, temperature=cfg.temperature,
+            loss_type=setup["loss_type"], strategy=strategy, alpha=alpha, temperature=cfg.temperature,
             per_agent_views=cfg.per_agent_views,
             optimizer=cfg.optimizer, lr=cfg.lr, optimizer_kwargs=cfg.optimizer_kwargs,
-            **paths, **cfg.train_kwargs(verbose),
+            **paths, **train,
         )
         probs = res.pop("test_probabilities")
         np.save(os.path.join(task_dir, PROBA_FILE), probs)
         accs = res["accuracy_agents"]
         return {
+            "loss_type": setup["loss_type"],
+            "loss_form": setup["loss_form"],
             "strategy": strategy,
             "accuracy_consensus": res["accuracy_consensus"],
             "accuracy_mean_ensemble": res["accuracy_mean_ensemble"],

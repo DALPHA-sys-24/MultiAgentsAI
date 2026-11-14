@@ -29,7 +29,8 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 │   │   └── study.py            étude partagée entre jobs, export des résultats
 │   ├── evaluation/
 │   │   ├── metrics.py          accuracy, NLL, ECE, désaccord
-│   │   └── reporting.py        médiane [q05 ; q95] sur les graines, tableaux
+│   │   ├── reporting.py        médiane [q05 ; q95] sur les graines, tableaux
+│   │   └── plots.py            figures PNG / PDF et summary.csv (sans Jupyter)
 │   └── utils/
 │       ├── config.py           configs des expériences (dataclasses), JSON, ligne de commande
 │       ├── device.py           GPU si disponible, sinon CPU
@@ -37,6 +38,7 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec les losses multi
 ├── experiments/
 │   ├── common.py               socle commun : tâches, dossier de résultats, reprise, fusion
 │   ├── collaboration.py        K agents pour chaque alpha (+ grand modèle seul en option)
+│   ├── plot_results.py         figures (PNG + PDF) de tous les résultats, sans Jupyter
 │   └── hyperparameter_search.py  meilleurs hyperparamètres d'UN modèle (Optuna)
 ├── configs/
 │   ├── collaboration.json
@@ -70,7 +72,7 @@ results/
 ├── hyperparameter_search/
 │   └── cifar10/resnet20/                 best.json, trials.csv, tuned_collaboration.json
 └── comparisons/
-    └── cifar10/resnet20_3agents/         sorties de compare_methods.ipynb
+    └── cifar10/resnet20_3agents/         sorties de plot_results.py (et de compare_methods.ipynb)
 ```
 
 Contenu d'un dossier `results/collaboration/<dataset>/<arch>_<K>agents[_<tag>]/` :
@@ -158,7 +160,7 @@ Loss `dml` : I_k = 1/(K−1) · Σ_{j≠k} KL(y^j ‖ y^k), les prédictions des
 | DML dans la forme du projet | `--loss-type dml --loss-form multiplicative` | L_k · (L_k + α · KL) |
 
 ```bash
-# DML classique (α = 1) et l'ensemble indépendant (α = 0, CE seule)
+# DML classique (α = 1) et l'ensemble indépendant (α = 0, CE seule pour chaque agent)
 python -m experiments.collaboration --loss-type dml --loss-form additive --alphas 0 1 --tag dml
 # variante multiplicative, plusieurs α
 python -m experiments.collaboration --loss-type dml --loss-form multiplicative --alphas 0 1 10 --tag dml_mult
@@ -169,6 +171,28 @@ Sur le cluster : la DML est déjà dans la liste `METHODS` de `slurm/collaborati
 Deux différences avec le papier :
 - les K agents sont mis à jour en même temps à partir du même forward, alors que le papier les met à jour l'un après l'autre dans un pas (la mise à jour simultanée est celle de la plupart des implémentations publiques) ;
 - le papier évalue chaque réseau seul : nos résultats le donnent aussi (chaque agent, agent médian, meilleur agent, moyenne simple), en plus du consensus.
+
+## Figures sans Jupyter : `plot_results`
+
+```bash
+python -m experiments.plot_results                                   # tous les groupes trouvés dans results/
+python -m experiments.plot_results --dataset cifar10 --arch resnet20 --num-agents 3
+python -m experiments.plot_results --dataset cifar10 --formats pdf   # PDF seulement (défaut : png pdf)
+python -m experiments.plot_results --run-dirs results/collaboration/cifar10/resnet20_3agents \
+    results/collaboration/cifar10/resnet20_3agents_dml --out-dir figures_article
+```
+
+Compare tous les dossiers `results/collaboration/<dataset>/<arch>_<K>agents*` d'un même dataset, d'une même architecture et d'un même K (ta méthode, DML, variantes `_tuned`...). Partout : médiane et bande des quantiles 5 % / 95 % sur les graines. Sorties dans `results/comparisons/<dataset>/<arch>_<K>agents/` :
+
+| Fichier | Contenu |
+|---|---|
+| `summary.csv` | une ligne par dossier et par alpha (+ grand modèle) : consensus, moyenne simple, agent médian, meilleur agent, désaccord, NLL, ECE en médiane / q05 / q95 |
+| `accuracy_vs_alpha.png/.pdf` | consensus et agent médian selon alpha, une courbe par méthode, grand modèle en pointillés |
+| `paired_difference.png/.pdf` | écart d'accuracy à graine égale avec le grand modèle (sinon α = 0), et graines gagnées |
+| `diversity_vs_alpha.png/.pdf` | désaccord entre agents selon alpha |
+| `learning_curves.png/.pdf` | accuracy de validation du consensus par époque, un panneau par méthode |
+
+Les PDF gardent le texte en vrai texte (polices TrueType), pour LaTeX. Sur le cluster, le job de fusion de `slurm/collaboration.sh` lance ce script tout seul : les figures sont prêtes à la fin des simulations. Pas de GPU nécessaire, quelques secondes sur le nœud de connexion.
 
 ## Notebooks
 
@@ -190,7 +214,7 @@ Sorties dans `results/comparisons/<dataset>/<arch>_<K>agents/`. Pour que la comp
 
 - `--n-runs N` : graines 0 à N - 1. `steps_per_execution` (8 par défaut) : 8 pas d'entraînement par appel au GPU ; résultats identiques (vérifié sous TF 2.15 et 2.21).
 - Le weight decay ne touche pas BatchNorm ni les biais (`"wd_exclude_norm_bias": false` pour l'ancien comportement).
-- **Loss du grand modèle au choix** (`reference_loss`). `"ce"` (défaut) ou `"same_as_agents"` : le grand modèle est entraîné avec la même forme de loss que les agents et I_k = 0 (`L_k²` en multiplicatif, comme les agents à α = 0). Les deux camps ont alors la même échelle de gradient, ce qui enlève l'effet « lr effectif » vu entre SGD et Adam.
+- **Loss du grand modèle au choix** (`reference_loss`). `"ce"` (défaut) ou `"same_as_agents"` : le grand modèle est entraîné avec la même forme de loss que les agents et I_k = 0 (`L_k²` en multiplicatif). Les deux camps ont alors la même échelle de gradient, ce qui enlève l'effet « lr effectif » vu entre SGD et Adam.
 - **Forme de la loss** (`loss_form`) : `"multiplicative"` (défaut) ou `"additive"` (`L_k + α I_k`, qui redonne la CE à α = 0).
 - **Reprise après coupure.** L'état complet (poids, BatchNorm, optimiseurs, historique) est sauvegardé à chaque époque. Relancer la même commande saute ce qui est terminé et reprend l'entraînement en cours à sa dernière époque. Les poids finaux et ceux de la meilleure `val_accuracy` sont gardés (`tasks/<tâche>/checkpoint/final_weights.npz`, `best_weights.npz`).
 - **Meilleur modèle** : `"eval_on": "best"` évalue le test sur les poids de la meilleure époque de validation (défaut `"final"`, comme avant).
@@ -336,7 +360,7 @@ python -m experiments.collaboration --alphas 1 --big-model true --n-runs 10
 python -m experiments.collaboration --cpu --train-subset 2000 --epochs 2 --warmup-epochs 1 --alphas 1 --n-runs 1
 ```
 
-- **Agents** : `num_agents` agents `arch` entraînés ensemble avec `loss_type` pour chaque valeur de `alphas`, sur chaque graine. **alpha = 0** : pas d'interaction (`L_k²` en multiplicatif, CE en additif), consensus par **vote majoritaire**. **alpha > 0** : consensus avec la `strategy` de la config (par défaut `simplicial`).
+- **Agents** : `num_agents` agents `arch` entraînés ensemble avec `loss_type` pour chaque valeur de `alphas`, sur chaque graine. **alpha = 0** : agents **indépendants** : chaque agent est entraîné seul en **cross-entropy classique** (loss `independent`, forme additive), quels que soient `loss_type` et `loss_form`, et le consensus est un **vote majoritaire**. **alpha > 0** : `loss_type`, `loss_form` et `strategy` de la config (par défaut `global_interaction`, multiplicative, `simplicial`). Chaque run de `results.json` indique la loss, la forme et le consensus utilisés.
 - **Grand modèle** (`--big-model true`) : la même architecture élargie. La largeur est cherchée automatiquement pour avoir autant de paramètres entraînables que les K agents réunis (5 × ResNet-20 = 1,36 M ; grand ResNet-20 largeur ≈ 2,24, écart < 0,3 %). Il est entraîné seul, en cross-entropy (`reference_loss: "ce"`) ou avec la même forme de loss que les agents et I_k = 0 (`"same_as_agents"`), avec les mêmes données, augmentation, optimiseur, epochs et graine. Il ne dépend pas de alpha : un seul grand modèle par graine, comparé à chaque alpha.
 - **Tâches** : `alpha<a>_seed<s>` (les K agents) et `big_model_seed<s>` (le grand modèle), indépendantes.
 - **`results.json`** :
@@ -396,7 +420,7 @@ J'utilise [Optuna](https://optuna.org) plutôt que Keras Tuner :
 
 Les autres réglages (jeu de données, `arch`, `epochs` par essai...) sont fixés dans le même fichier.
 
-**Loss du modèle** (`loss`) : `ce` (cross-entropy, défaut) ou `same_as_agents` (`L_k²` en multiplicatif, comme un agent à α = 0). Avec SGD, la loss multiplicative des agents a un gradient environ `2 L_k` fois plus grand que la CE : un lr trouvé en CE peut être trop grand pour les K agents (lr 0.1 fait diverger la loss multiplicative). `same_as_agents` donne un lr directement transposable aux agents ; avec Adam / AdamW la différence est faible.
+**Loss du modèle** (`loss`) : `ce` (cross-entropy, défaut) ou `same_as_agents` (`L_k²` en multiplicatif). Avec SGD, la loss multiplicative des agents a un gradient environ `2 L_k` fois plus grand que la CE : un lr trouvé en CE peut être trop grand pour les K agents (lr 0.1 fait diverger la loss multiplicative). `same_as_agents` donne un lr directement transposable aux agents ; avec Adam / AdamW la différence est faible.
 
 **Critère.** `metric` vaut `val_accuracy` (défaut) ou `val_loss` du modèle. Chaque essai est noté sur la meilleure époque de **validation**, et le test n'est jamais utilisé pendant la recherche.
 

@@ -42,6 +42,15 @@ def test_tasks_then_merge_with_big_model(tmp_path, fake_data):
     assert "Grand modèle seul" in res["vs_big_model"]["1"] and res["model_sizes"]["big_width"] > 1
     assert sorted(os.listdir(os.path.join(run_dir, "test_probabilities"))) == ["alpha1_seed0.npy", "big_model_seed0.npy"]
 
+    # Figures et tableau à partir du dossier fusionné (sans Jupyter)
+    pytest.importorskip("matplotlib")
+    from experiments.plot_results import main as plot_main
+    out_dir = str(tmp_path / "figures")
+    plot_main(["--run-dirs", run_dir, "--out-dir", out_dir, "--formats", "png", "pdf"])
+    files = set(os.listdir(out_dir))
+    assert {"summary.csv", "accuracy_vs_alpha.png", "accuracy_vs_alpha.pdf", "paired_difference.pdf",
+            "diversity_vs_alpha.pdf", "learning_curves.pdf"} <= files
+
 
 def test_alpha_sweep_without_big_model(tmp_path, fake_data):
     run_dir = str(tmp_path / "sweep")
@@ -51,6 +60,10 @@ def test_alpha_sweep_without_big_model(tmp_path, fake_data):
     assert sorted(os.listdir(os.path.join(run_dir, "tasks"))) == ["alpha0_seed0", "alpha1_seed0"]
     assert len(res["runs"]) == 2 and set(res["summary"]) == {"0", "1"} and "big_model" not in res
     assert res["summary"]["0"]["strategy"] == "majority"
+    alpha0 = next(r for r in res["runs"] if r["alpha"] == 0)       # agents indépendants en CE classique
+    alpha1 = next(r for r in res["runs"] if r["alpha"] == 1)
+    assert (alpha0["loss_type"], alpha0["loss_form"], alpha0["strategy"]) == ("independent", "additive", "majority")
+    assert (alpha1["loss_type"], alpha1["loss_form"]) == ("global_interaction", "multiplicative")
     assert sorted(os.listdir(os.path.join(run_dir, "test_probabilities"))) == ["alpha0_seed0.npy", "alpha1_seed0.npy"]
 
 

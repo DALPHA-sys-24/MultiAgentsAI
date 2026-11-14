@@ -125,3 +125,13 @@ def test_dml_gradient_of_agent_does_not_reach_other_agents():
     others = [v for a in model._agents[1:] for v in a.trainable_variables]
     grads = tape.gradient(loss_0, others)
     assert all(g is None or float(tf.reduce_max(tf.abs(g))) == 0.0 for g in grads)
+
+
+@pytest.mark.parametrize("alpha", [0.0, 5.0])
+def test_independent_additive_is_plain_ce_for_each_agent(alpha):
+    """alpha = 0 de experiments.collaboration : chaque agent en cross-entropy classique, sans interaction."""
+    model, x, y = make_model(k=3, loss_type="independent", alpha=alpha, form="additive")
+    out = model(x)
+    ce = tf.keras.losses.sparse_categorical_crossentropy(tf.tile(y[:, None], [1, 3]), out)
+    np.testing.assert_allclose([float(v) for v in model.compute_losses(out, y)],
+                               tf.reduce_mean(ce, axis=0).numpy(), rtol=1e-5)

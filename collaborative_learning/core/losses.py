@@ -169,6 +169,15 @@ def majority_loo(ctx, outputs, log_p, raw_log_p, y):
     return (1.0 - w_k) * ce_labels(majority, log_p, ctx.num_classes)
 
 
+@register_loss("independent")
+def independent(ctx, outputs, log_p, raw_log_p, y):
+    """
+    Agents indépendants : pas d'interaction, I_k = 0. Avec la forme "additive", chaque agent
+    est entraîné en cross-entropy classique (utilisé pour alpha = 0 dans experiments.collaboration).
+    """
+    return tf.zeros_like(log_p[..., 0])   # (batch, K)
+
+
 @register_loss("dml")
 def dml(ctx, outputs, log_p, raw_log_p, y):
     """

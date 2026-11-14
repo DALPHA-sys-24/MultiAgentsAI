@@ -33,8 +33,11 @@ PRECISIONS = ("float32", "mixed_bfloat16")
 EVAL_ON = ("final", "best")
 REFERENCE_LOSSES = ("ce", "same_as_agents")
 
-# Stratégie de consensus imposée quand alpha = 0 (agents indépendants) dans le sweep
+# Stratégie de consensus imposée quand alpha = 0 (agents indépendants)
 STRATEGY_NO_INTERACTION = "majority"
+# alpha = 0 : agents indépendants, chacun en cross-entropy classique (loss "independent", forme additive)
+LOSS_NO_INTERACTION = "independent"
+FORM_NO_INTERACTION = "additive"
 
 
 def opt(default, help: str = "", choices=None, kind: str = "auto"):
@@ -209,7 +212,8 @@ class CollaborationConfig(TrainConfig):
     EXTENSIBLE = TrainConfig.EXTENSIBLE + ("alphas", "big_model")
     arch: str = opt("resnet20", "Architecture des agents (le grand modèle a la même, élargie).")
     alphas: List[float] = opt([1.0], "Valeur(s) de alpha : une seule = un run simple, plusieurs = un balayage "
-                                     "(alpha = 0 : agents indépendants, vote majoritaire).", kind="list_float")
+                                     "(alpha = 0 : agents indépendants en cross-entropy, vote majoritaire).",
+                         kind="list_float")
     lr: Union[float, List[float]] = opt(0.01, "Un lr pour tous les agents, ou un par agent "
                                               "(0.1 fait diverger la loss multiplicative).", kind="per_agent")
     big_model: bool = opt(False, "Entraîne aussi un grand modèle seul, au même nombre de paramètres que les K agents.")
@@ -231,9 +235,19 @@ class CollaborationConfig(TrainConfig):
                     errors.append(f"'{key}' est une liste (un par agent) : précise 'big_{key}' pour le grand modèle")
         return errors
 
+    def setup_for(self, alpha: float) -> Dict[str, str]:
+        """
+        Loss, forme et consensus pour un alpha. alpha = 0 : agents indépendants, chacun en
+        cross-entropy classique, consensus par vote majoritaire. Sinon : ceux de la config.
+        """
+        if alpha == 0:
+            return {"loss_type": LOSS_NO_INTERACTION, "loss_form": FORM_NO_INTERACTION,
+                    "strategy": STRATEGY_NO_INTERACTION}
+        return {"loss_type": self.loss_type, "loss_form": self.loss_form, "strategy": self.strategy}
+
     def strategy_for(self, alpha: float) -> str:
         """Vote majoritaire sans interaction (alpha = 0), sinon la stratégie de la config."""
-        return STRATEGY_NO_INTERACTION if alpha == 0 else self.strategy
+        return self.setup_for(alpha)["strategy"]
 
     def big_model_optimizer(self) -> Dict[str, Any]:
         """Optimiseur du grand modèle : big_* si donné, sinon celui des agents."""

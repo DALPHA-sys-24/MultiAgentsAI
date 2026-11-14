@@ -31,3 +31,8 @@ ml Optuna/3.5.0-foss-2023a
 source slurm/helpers.sh
 echo "FUSION $EXP | $(date) | options : $*"
 python -m experiments."$EXP" "$@" --merge-only --cpu
+
+# Figures (PNG + PDF) et summary.csv dans results/comparisons/ : une erreur ici n'annule pas la fusion
+if [ "$EXP" = "collaboration" ]; then
+    python -m experiments.plot_results --results-root results || echo "Figures non produites (voir l'erreur ci-dessus)."
+fi
