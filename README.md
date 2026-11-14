@@ -3,7 +3,7 @@
 Apprentissage collaboratif de K réseaux (ResNet, MobileNet) entraînés ensemble avec une loss multi-agents, puis combinés par un consensus. Le projet mesure ce que la collaboration apporte face à :
 
 - K agents **indépendants** (cross-entropy seule, vote majoritaire) ;
-- la **Deep Mutual Learning** (DML, Zhang et al., 2018) ;
+- la **Deep Mutual Learning** (DML, [Zhang et al., CVPR 2018](https://arxiv.org/abs/1706.00384)) ;
 - un **grand modèle seul** de même architecture, élargi pour avoir autant de paramètres que les K agents réunis.
 
 TensorFlow / Keras, testé sous TF 2.15 (Keras 2) et TF 2.21 (Keras 3), sur GPU ou CPU.
@@ -131,4 +131,18 @@ Losses, stratégies de consensus, architectures, optimiseurs et jeux de données
 
 ## Référence
 
-Y. Zhang, T. Xiang, T. M. Hospedales, H. Lu. *Deep Mutual Learning*. CVPR 2018.
+Ce code accompagne l'article :
+
+J. Ketcha Kouakep, S. Uann, T. Carletti. *Multi-Agent Learning with Cooperation-Driven Optimization Dynamics*. arXiv:2609.16917, 2026. [arxiv.org/abs/2609.16917](https://arxiv.org/abs/2609.16917)
+
+```bibtex
+@misc{ketchakouakep2026multiagent,
+  title         = {Multi-Agent Learning with Cooperation-Driven Optimization Dynamics},
+  author        = {Ketcha Kouakep, Jarod and Uann, Sreyvi and Carletti, Timoteo},
+  year          = {2026},
+  eprint        = {2609.16917},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.MA},
+  url           = {https://arxiv.org/abs/2609.16917}
+}
+```
