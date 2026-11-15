@@ -93,6 +93,7 @@ Figures produites par `plot_results` (médiane et bande q05–q95 sur les graine
 | `paired_difference` | écart d'accuracy graine par graine avec le grand modèle (sinon α = 0) |
 | `diversity_vs_alpha` | désaccord entre agents selon α |
 | `learning_curves` | accuracy de validation par époque |
+| `accuracy_vs_lr`, `diversity_vs_lr` | si une méthode a été lancée avec plusieurs lr (`collaboration_lr.sh`) |
 
 Des notebooks d'analyse plus détaillés sont dans `notebooks/`.
 
@@ -101,6 +102,7 @@ Des notebooks d'analyse plus détaillés sont dans `notebooks/`.
 ```bash
 sbatch slurm/hyperparameter_search.sh   # optionnel : recherche d'hyperparamètres
 sbatch slurm/collaboration.sh           # toutes les méthodes, datasets, graines et α en parallèle
+sbatch slurm/collaboration_lr.sh        # α fixé, plusieurs lr : méthodes collaboratives vs grand modèle à lr*
 ```
 
 Les réglages (datasets, méthodes, `N_RUNS`, `ALPHAS`...) sont en tête de chaque script. Une tâche = un dataset × une méthode × une graine × (un α ou le grand modèle) ; les K agents d'un run restent dans la même tâche. Un job de fusion est soumis automatiquement : il écrit `results.json` puis les figures. Si une donnée change le nombre de tâches, mettre à jour `#SBATCH --array` (calcul en tête du script).

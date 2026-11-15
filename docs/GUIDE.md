@@ -413,6 +413,14 @@ sbatch slurm/collaboration.sh           # ensuite : 2 datasets x (la méthode pr
 - **Relancer** le même script ne refait que les tâches non terminées ; une tâche coupée reprend à sa dernière époque. Une seule tâche : `sbatch --array=7 slurm/collaboration.sh`.
 - **Données** : télécharger une fois depuis le nœud de connexion si les nœuds de calcul n'ont pas Internet (`python -c "from collaborative_learning.data import download_dataset; download_dataset('cifar10')"`). Les tâches qui démarrent ensemble lisent le cache l'une après l'autre (verrou), sans se gêner.
 
+### Balayage du learning rate (`slurm/collaboration_lr.sh`)
+
+α fixé (`ALPHA=1`), K = 5 agents, chaque méthode de `METHODS` (interaction globale, DML) lancée pour chaque lr de `LRS` (0.1, 0.01, 0.001, 0.0001). Tous les autres hyperparamètres viennent de `tuned_collaboration.json` du dataset. Référence : le grand modèle seul, entraîné une fois par graine avec le lr* de la recherche.
+
+- Dossiers : `<arch>_5agents_lr<lr>_tuned/` et `<arch>_5agents_dml_lr<lr>_tuned/` pour les agents, `<arch>_5agents_tuned/` pour le grand modèle (seule sa tâche `big_model_seed<s>` est lancée).
+- Tâches : 2 datasets × (2 méthodes × 4 lr × 5 graines + 5 grands modèles) = 90 → `--array=0-89`.
+- Figures : `plot_results` détecte une méthode lancée avec plusieurs lr et écrit `accuracy_vs_lr` (consensus et agent médian selon le lr, échelle log, grand modèle à lr* en pointillés) et `diversity_vs_lr`.
+
 ### Avec Git
 
 ```bash

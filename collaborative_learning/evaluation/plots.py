@@ -10,12 +10,18 @@ des quantiles 5 % / 95 % sur les graines. Sorties dans results/comparisons/<data
     paired_difference.png/.pdf      écart de chaque méthode avec la référence, graine par graine
     diversity_vs_alpha.png/.pdf     désaccord entre agents selon alpha
     learning_curves.png/.pdf        accuracy de validation par époque
+    accuracy_vs_lr.png/.pdf         si une méthode a été lancée avec plusieurs lr (slurm/collaboration_lr.sh) :
+                                    consensus et agent médian selon le lr, grand modèle (lr*) en référence
+    diversity_vs_lr.png/.pdf        désaccord entre agents selon le lr
+
+Les figures selon alpha ne sont faites que s'il y a au moins deux valeurs de alpha.
 
     from collaborative_learning.evaluation.plots import plot_group
     plot_group("results", "cifar10", "resnet20", 3)
 """
 import csv
 import glob
+import re
 import json
 import logging
 import os
@@ -67,13 +73,33 @@ def method_label(cfg: dict) -> str:
     return label + (f" [{'_'.join(extra)}]" if extra else "")
 
 
+LR_TAG = re.compile(r"^lr[0-9.e-]+$")
+
+
+def method_key(cfg: dict) -> str:
+    """Nom de la méthode sans le lr (le tag lr<valeur> de slurm/collaboration_lr.sh est retiré)."""
+    loss = cfg.get("loss_type", "?")
+    name = "DML" if loss == "dml" else loss
+    label = f"{name} ({FORM_SHORT.get(cfg.get('loss_form'), cfg.get('loss_form'))})"
+    extra = [t for t in (cfg.get("tag") or "").split("_") if t and t != "dml" and not LR_TAG.match(t)]
+    return label + (f" [{'_'.join(extra)}]" if extra else "")
+
+
+def lr_value(cfg: dict) -> Optional[float]:
+    """lr des agents (None s'il y a un lr différent par agent)."""
+    lr = cfg.get("lr")
+    if isinstance(lr, list):
+        return float(lr[0]) if len(set(lr)) == 1 else None
+    return None if lr is None else float(lr)
+
+
 def load_run(run_dir: str) -> dict:
     with open(os.path.join(run_dir, "config.json")) as f:
         cfg = json.load(f)
     with open(os.path.join(run_dir, "results.json")) as f:
         res = json.load(f)
     return {"dir": run_dir, "name": os.path.basename(run_dir), "config": cfg, "results": res,
-            "label": method_label(cfg)}
+            "label": method_label(cfg), "method": method_key(cfg), "lr": lr_value(cfg)}
 
 
 def stats(values) -> tuple:
@@ -212,8 +238,12 @@ def plot_learning_curves(runs, key="val_accuracy"):
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
     n = len(runs)
-    fig, axes = plt.subplots(1, n, figsize=(5.8 * n, 4), squeeze=False, sharey=True)
-    for ax, run in zip(axes[0], runs):
+    ncols = min(n, 3)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.8 * ncols, 4 * nrows), squeeze=False, sharey=True)
+    for ax in axes.flat[n:]:
+        ax.set_visible(False)
+    for ax, run in zip(axes.flat, runs):
         by_alpha = {}
         for r in run["results"]["runs"]:
             if r["history"].get(key):
@@ -234,12 +264,71 @@ def plot_learning_curves(runs, key="val_accuracy"):
                 x = np.arange(1, m + 1)
                 ax.fill_between(x, np.quantile(arr, Q_LO, 0), np.quantile(arr, Q_HI, 0), color=BIG_COLOR, alpha=0.1, lw=0)
                 ax.plot(x, np.median(arr, 0), color=BIG_COLOR, ls=":", lw=2, label="grand modèle")
-        ax.set_title(run["label"], color=INK, loc="left", fontweight="bold")
+        ax.set_title(run["label"] if run["results"]["runs"] else f"grand modèle seul [{run['name']}]",
+                     color=INK, loc="left", fontweight="bold")
         ax.set_xlabel("époque", color=INK)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.legend(frameon=False, fontsize=9)
         _style(ax)
-    axes[0][0].set_ylabel("accuracy de validation (%)" + (" — consensus" if key == "val_accuracy" else ""), color=INK)
+    for row in axes:
+        row[0].set_ylabel("accuracy de validation (%)" + (" — consensus" if key == "val_accuracy" else ""), color=INK)
+    fig.tight_layout()
+    return fig
+
+
+def lr_sweeps(runs) -> Dict[tuple, Dict[float, list]]:
+    """{(méthode, alpha): {lr: [runs]}} pour les méthodes lancées avec au moins deux lr."""
+    out = {}
+    for run in runs:
+        if run["lr"] is None:
+            continue
+        for r in run["results"]["runs"]:
+            out.setdefault((run["method"], float(r["alpha"])), {}).setdefault(run["lr"], []).append(r)
+    return {k: v for k, v in out.items() if len(v) >= 2}
+
+
+def _big_model_reference(runs):
+    """(runs du grand modèle, son lr) : le dossier qui a un grand modèle, en priorité celui sans tag lr."""
+    with_big = [r for r in runs if r["results"].get("big_model")]
+    if not with_big:
+        return None, None
+    with_big.sort(key=lambda r: any(LR_TAG.match(t) for t in (r["config"].get("tag") or "").split("_")))
+    run = with_big[0]
+    lr = run["config"].get("big_lr") or run["lr"]
+    return run["results"]["big_model"]["runs"], lr
+
+
+def plot_vs_lr(runs, sweeps, keys, titles, ylabel, scale=100, big_key=None):
+    """Une courbe par (méthode, alpha) selon le lr (axe log), médiane et bande q05-q95 sur les graines."""
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, len(keys), figsize=(6.2 * len(keys), 4.2), squeeze=False, sharey=True)
+    big_runs, big_lr = _big_model_reference(runs) if big_key else (None, None)
+    show_alpha = len({a for _, a in sweeps}) > 1
+    for ax, key, title in zip(axes[0], keys, titles):
+        for i, ((method, alpha), by_lr) in enumerate(sorted(sweeps.items())):
+            color = COLORS[i % len(COLORS)]
+            lrs = sorted(by_lr)
+            s = np.array([stats([r.get(key) * scale for r in by_lr[lr] if r.get(key) is not None]) for lr in lrs])
+            ax.fill_between(lrs, s[:, 1], s[:, 2], color=color, alpha=0.15, lw=0)
+            label = method + (f" α={alpha:g}" if show_alpha else "")
+            ax.plot(lrs, s[:, 0], color=color, marker="o", ms=6, mec=SURFACE, mew=1.2, lw=2, label=label)
+        if big_runs:
+            m, lo, hi = stats([r[big_key] * scale for r in big_runs])
+            ax.axhspan(lo, hi, color=BIG_COLOR, alpha=0.08, lw=0)
+            ax.axhline(m, color=BIG_COLOR, ls=":", lw=2,
+                       label="grand modèle seul" + (f" (lr* = {big_lr:g})" if big_lr else ""))
+            if big_lr:
+                ax.axvline(big_lr, color=BIG_COLOR, lw=0.8, alpha=0.4)
+        ax.set_xscale("log")
+        all_lrs = sorted({lr for v in sweeps.values() for lr in v})
+        ax.set_xticks(all_lrs, [f"{lr:g}" for lr in all_lrs])
+        ax.minorticks_off()
+        ax.set_xlabel("learning rate des agents (échelle log)", color=INK)
+        ax.set_title(title, color=INK, loc="left", fontweight="bold")
+        _style(ax)
+    axes[0][0].set_ylabel(ylabel, color=INK)
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.0, 0.92), frameon=False)
     fig.tight_layout()
     return fig
 
@@ -255,7 +344,7 @@ SUMMARY_METRICS = [("consensus", "accuracy_consensus"), ("mean_ensemble", "accur
 
 
 def write_summary_csv(runs, path: str) -> None:
-    header = ["run_dir", "method", "alpha", "loss", "strategy", "n_seeds"]
+    header = ["run_dir", "method", "lr", "alpha", "loss", "strategy", "n_seeds"]
     for name, _ in SUMMARY_METRICS:
         header += [f"{name}_median", f"{name}_q05", f"{name}_q95"]
     rows = []
@@ -265,14 +354,16 @@ def write_summary_csv(runs, path: str) -> None:
             by_alpha.setdefault(float(r["alpha"]), []).append(r)
         for a in sorted(by_alpha):
             rs = by_alpha[a]
-            row = [run["name"], run["label"], f"{a:g}", f"{rs[0].get('loss_type', run['config'].get('loss_type'))} "
+            row = [run["name"], run["label"], "" if run["lr"] is None else f"{run['lr']:g}", f"{a:g}", f"{rs[0].get('loss_type', run['config'].get('loss_type'))} "
                    f"({rs[0].get('loss_form', run['config'].get('loss_form'))})", rs[0].get("strategy"), len(rs)]
             for _, key in SUMMARY_METRICS:
                 row += [f"{v:.6g}" for v in stats([r.get(key) for r in rs])]
             rows.append(row)
         big = run["results"].get("big_model")
         if big:
-            row = [run["name"], "grand modèle seul", "", run["config"].get("reference_loss", "ce"), "", len(big["runs"])]
+            big_lr = run["config"].get("big_lr") or run["lr"]
+            row = [run["name"], "grand modèle seul", "" if big_lr is None else f"{big_lr:g}", "",
+                   run["config"].get("reference_loss", "ce"), "", len(big["runs"])]
             for name, _ in SUMMARY_METRICS:
                 key = {"consensus": "accuracy", "nll_consensus": "nll", "ece_consensus": "ece"}.get(name)
                 row += [f"{v:.6g}" for v in stats([r[key] for r in big["runs"]])] if key else ["", "", ""]
@@ -301,7 +392,7 @@ def plot_group(results_root: str, dataset: str, arch: str, num_agents: int,
 
     dirs = run_dirs or group_dirs(results_root, dataset, arch, num_agents)
     runs = [load_run(d) for d in dirs]
-    runs = [r for r in runs if r["results"].get("runs")]
+    runs = [r for r in runs if r["results"].get("runs") or r["results"].get("big_model")]
     if not runs:
         log.info("[figures] aucun résultat pour %s / %s / K = %d", dataset, arch, num_agents)
         return {}
@@ -315,16 +406,30 @@ def plot_group(results_root: str, dataset: str, arch: str, num_agents: int,
     write_summary_csv(runs, path)
     out["summary"] = [path]
 
-    fig = plot_vs_alpha(runs, alphas, ["accuracy_consensus", "accuracy_agent_median"],
-                        [f"Consensus — {title}", "Agent médian (un agent seul)"], "accuracy de test (%)",
-                        big_key="accuracy")
-    out["accuracy_vs_alpha"] = _save(fig, out_dir, "accuracy_vs_alpha", formats)
-    plt.close(fig)
+    if len(alphas) >= 2:
+        fig = plot_vs_alpha(runs, alphas, ["accuracy_consensus", "accuracy_agent_median"],
+                            [f"Consensus — {title}", "Agent médian (un agent seul)"], "accuracy de test (%)",
+                            big_key="accuracy")
+        out["accuracy_vs_alpha"] = _save(fig, out_dir, "accuracy_vs_alpha", formats)
+        plt.close(fig)
 
-    fig = plot_vs_alpha(runs, alphas, ["disagreement"], [f"Diversité des agents — {title}"],
-                        "désaccord entre agents (%)")
-    out["diversity_vs_alpha"] = _save(fig, out_dir, "diversity_vs_alpha", formats)
-    plt.close(fig)
+        fig = plot_vs_alpha(runs, alphas, ["disagreement"], [f"Diversité des agents — {title}"],
+                            "désaccord entre agents (%)")
+        out["diversity_vs_alpha"] = _save(fig, out_dir, "diversity_vs_alpha", formats)
+        plt.close(fig)
+
+    sweeps = lr_sweeps(runs)
+    if sweeps:
+        fig = plot_vs_lr(runs, sweeps, ["accuracy_consensus", "accuracy_agent_median"],
+                         [f"Consensus — {title}", "Agent médian (un agent seul)"], "accuracy de test (%)",
+                         big_key="accuracy")
+        out["accuracy_vs_lr"] = _save(fig, out_dir, "accuracy_vs_lr", formats)
+        plt.close(fig)
+
+        fig = plot_vs_lr(runs, sweeps, ["disagreement"], [f"Diversité des agents — {title}"],
+                         "désaccord entre agents (%)")
+        out["diversity_vs_lr"] = _save(fig, out_dir, "diversity_vs_lr", formats)
+        plt.close(fig)
 
     fig = plot_paired(runs)
     if fig is not None:

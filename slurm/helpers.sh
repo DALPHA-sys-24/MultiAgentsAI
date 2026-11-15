@@ -15,14 +15,16 @@ check_array_size() {
     fi
 }
 
-# submit_merge EXP TASK_IDX ARGS... : la tâche 0 de chaque dataset soumet le job de fusion,
+# submit_merge EXP TASK_IDX ARGS... : la tâche 0 de chaque dossier soumet le job de fusion,
 # qui démarre quand tout le job array est fini et écrit results.json. AUTO_MERGE=0 pour ne pas le faire.
+# Les fusions de même nom (MERGE_NAME, défaut <EXP>_merge) passent l'une après l'autre (singleton) :
+# la dernière fait les figures avec tous les dossiers déjà fusionnés.
 submit_merge() {
-    local exp=$1 idx=$2
+    local exp=$1 idx=$2 name=${MERGE_NAME:-${1}_merge}
     shift 2
     [ "$idx" -eq 0 ] && [ "${AUTO_MERGE:-1}" != 0 ] || return 0
-    sbatch --dependency="afterany:$SLURM_ARRAY_JOB_ID" --job-name="${exp}_merge" \
-           --output="slurm_logs/${exp}_merge_%j.out" --error="slurm_logs/${exp}_merge_%j.err" \
+    sbatch --dependency="afterany:$SLURM_ARRAY_JOB_ID,singleton" --job-name="$name" \
+           --output="slurm_logs/${name}_%j.out" --error="slurm_logs/${name}_%j.err" \
            slurm/merge_results.sh "$exp" "$@" \
         || echo "Job de fusion non soumis : lancer « sbatch slurm/merge_results.sh $exp $* » après la fin des tâches."
 }

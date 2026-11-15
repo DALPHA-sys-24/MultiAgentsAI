@@ -48,8 +48,8 @@ def test_tasks_then_merge_with_big_model(tmp_path, fake_data):
     out_dir = str(tmp_path / "figures")
     plot_main(["--run-dirs", run_dir, "--out-dir", out_dir, "--formats", "png", "pdf"])
     files = set(os.listdir(out_dir))
-    assert {"summary.csv", "accuracy_vs_alpha.png", "accuracy_vs_alpha.pdf", "paired_difference.pdf",
-            "diversity_vs_alpha.pdf", "learning_curves.pdf"} <= files
+    assert {"summary.csv", "paired_difference.png", "paired_difference.pdf", "learning_curves.pdf"} <= files
+    assert "accuracy_vs_alpha.png" not in files                 # un seul alpha : pas de figure selon alpha
 
 
 def test_alpha_sweep_without_big_model(tmp_path, fake_data):
