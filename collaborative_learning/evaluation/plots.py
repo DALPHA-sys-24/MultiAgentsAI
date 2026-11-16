@@ -28,8 +28,12 @@ log = logging.getLogger(__name__)
 logging.getLogger("fontTools").setLevel(logging.WARNING)   # sinon le sous-ensemble de polices du PDF remplit les logs
 
 Q_LO, Q_HI = 0.05, 0.95
-# Palette catégorielle (une couleur par méthode) ; gris foncé pour le grand modèle
-COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#9b59b6", "#c9a227", "#d6457a", "#4b5563"]
+# Une couleur par méthode, la même dans toutes les figures et les notebooks ; grand modèle en gris foncé.
+# Chaque méthode a aussi sa gamme (clair -> foncé) quand elle a plusieurs courbes (plusieurs alpha, lr...).
+METHOD_COLORS = {"global_interaction": "#2a78d6", "dml": "#eb6834", "independent": "#9b59b6"}
+METHOD_CMAPS = {"global_interaction": "Blues", "dml": "Oranges", "independent": "Purples"}
+COLORS = ["#1baf7a", "#c9a227", "#d6457a", "#0e9aa7", "#8c564b"]          # autres méthodes, dans l'ordre
+OTHER_CMAPS = ["Greens", "YlOrBr", "RdPu", "GnBu", "copper_r"]
 BIG_COLOR = "#3a3935"
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e0", "#ffffff"
 INDEPENDENT = "independent"
@@ -57,10 +61,25 @@ def method_label(method: str) -> str:
     return METHOD_LABELS.get(method, method)
 
 
-def method_color(method: str) -> str:
+def _other_index(method: str) -> int:
     if method not in METHOD_ORDER:
         METHOD_ORDER.append(method)
-    return COLORS[METHOD_ORDER.index(method) % len(COLORS)]
+    return [m for m in METHOD_ORDER if m not in METHOD_COLORS].index(method)
+
+
+def method_color(method: str) -> str:
+    if method in METHOD_COLORS:
+        return METHOD_COLORS[method]
+    return COLORS[_other_index(method) % len(COLORS)]
+
+
+def method_ramp(method: str, n: int) -> list:
+    """n nuances de la couleur de la méthode (clair -> foncé), pour plusieurs courbes d'une même méthode."""
+    import matplotlib.pyplot as plt
+    if n <= 1:
+        return [method_color(method)]
+    name = METHOD_CMAPS.get(method) or OTHER_CMAPS[_other_index(method) % len(OTHER_CMAPS)]
+    return list(plt.get_cmap(name)(np.linspace(0.45, 0.95, n)))
 
 
 def load_entry(run_dir: str, method: Optional[str] = None, point: Optional[Dict[str, Any]] = None) -> Optional[dict]:
@@ -139,7 +158,7 @@ def _reference_band(ax, reference, key="accuracy", scale=100):
     m, lo, hi = stats([r[key] * scale for r in reference["results"]["runs"] if r.get(key) is not None])
     ax.axhspan(lo, hi, color=BIG_COLOR, alpha=0.08, lw=0)
     lr = reference.get("lr")
-    label = "grand modèle seul" + (f" (lr* = {lr:g})" if isinstance(lr, (int, float)) else "")
+    label = "grand modèle seul" + (f" (lr* = {power_of_ten(lr)})" if isinstance(lr, (int, float)) and lr > 0 else "")
     ax.axhline(m, color=BIG_COLOR, ls=":", lw=2, label=label)
 
 
@@ -169,6 +188,17 @@ def series_by_method(entries, param: str, other_params: Sequence[str]) -> Dict[s
     return series
 
 
+def power_of_ten(value: float) -> str:
+    """0.001 -> $10^{-3}$ ; 0.0003 -> $3 \\times 10^{-4}$ (graduations des axes en échelle log)."""
+    exponent = int(np.floor(np.log10(value) + 1e-9))
+    mantissa = value / 10 ** exponent
+    if abs(mantissa - round(mantissa)) < 1e-6:
+        mantissa = round(mantissa)
+    if mantissa == 1:
+        return f"$10^{{{exponent}}}$"
+    return f"${mantissa:g} \\times 10^{{{exponent}}}$"
+
+
 def fmt(value) -> str:
     return f"{value:g}" if isinstance(value, float) else str(value)
 
@@ -180,9 +210,13 @@ def plot_vs_param(entries, reference, param, keys, titles, ylabel, other_params=
     values = sorted({v for s in series.values() for v in s})
     log_x = param in LOG_PARAMS and all(isinstance(v, (int, float)) and v > 0 for v in values)
     fig, axes = plt.subplots(1, len(keys), figsize=(6.2 * len(keys), 4.2), squeeze=False, sharey=True)
+    shades = {}
+    for method, label in series:
+        shades.setdefault(method, []).append(label)
+    shade = {(m, l): c for m, labels in shades.items() for l, c in zip(labels, method_ramp(m, len(labels)))}
     for ax, key, title in zip(axes[0], keys, titles):
         for i, ((method, label), by_value) in enumerate(series.items()):
-            color = method_color(method) if by_method_color else COLORS[i % len(COLORS)]
+            color = method_color(method) if by_method_color else shade[(method, label)]
             xs = sorted(by_value)
             s = np.array([stats([r.get(key) * scale for r in by_value[x] if r.get(key) is not None]) for x in xs])
             pos = xs if log_x else [values.index(x) for x in xs]
@@ -192,7 +226,7 @@ def plot_vs_param(entries, reference, param, keys, titles, ylabel, other_params=
             _reference_band(ax, reference)
         if log_x:
             ax.set_xscale("log")
-            ax.set_xticks(values, [fmt(v) for v in values])
+            ax.set_xticks(values, [power_of_ten(v) for v in values])
             ax.minorticks_off()
         else:
             ax.set_xticks(range(len(values)), [fmt(v) for v in values])
@@ -207,12 +241,23 @@ def plot_vs_param(entries, reference, param, keys, titles, ylabel, other_params=
     return fig
 
 
-def entry_name(e: dict) -> str:
-    point = ", ".join(f"{'α' if k == 'alpha' else k}={fmt(v)}" for k, v in e["point"].items())
-    if not point:
+def constant_keys(entries) -> set:
+    """Valeurs de la grille identiques pour tous les dossiers (ex. alpha = 1 dans lr_sweep) : inutiles dans les noms."""
+    keys = {k for e in entries for k in e["point"]}
+    return {k for k in keys if len({fmt(e["point"].get(k)) for e in entries}) == 1}
+
+
+def point_label(e: dict, hide=(), sep="=") -> str:
+    return ", ".join(f"{'α' if k == 'alpha' else k}{sep}{fmt(v)}" for k, v in e["point"].items() if k not in hide)
+
+
+def entry_name(e: dict, hide=()) -> str:
+    """Nom lisible d'un dossier : méthode et valeurs de la grille (sauf celles de `hide`)."""
+    point = point_label(e, hide)
+    if not point and not e["point"]:
         alphas = sorted({float(r["alpha"]) for r in e["results"]["runs"]})
         point = "α=" + "/".join(fmt(a) for a in alphas)
-    return f"{method_label(e['method'])} {point}"
+    return f"{method_label(e['method'])} {point}".strip()
 
 
 def plot_paired(entries, reference):
@@ -227,6 +272,7 @@ def plot_paired(entries, reference):
             return None
         ref_name, ref = "agents indépendants", {r["seed"]: r["accuracy_consensus"] for r in base}
     rows = []
+    hide = constant_keys(entries)
     for e in entries:
         if not reference and e["method"] == INDEPENDENT:
             continue
@@ -234,7 +280,7 @@ def plot_paired(entries, reference):
             diffs = [(r["accuracy_consensus"] - ref[r["seed"]]) * 100
                      for r in e["results"]["runs"] if float(r["alpha"]) == alpha and r["seed"] in ref]
             if diffs:
-                name = entry_name(e) if e["point"] else f"{method_label(e['method'])} α={fmt(alpha)}"
+                name = entry_name(e, hide) if e["point"] else f"{method_label(e['method'])} α={fmt(alpha)}"
                 rows.append((name, method_color(e["method"]), np.array(diffs)))
     if not rows:
         return None
@@ -257,12 +303,13 @@ def plot_paired(entries, reference):
     return fig
 
 
-def _curve(ax, histories, color, label, ls="-"):
+def _curve(ax, histories, color, label, ls="-", band=True):
     from matplotlib.ticker import MaxNLocator
     m = min(len(h) for h in histories)
     arr = np.array([h[:m] for h in histories]) * 100
     x = np.arange(1, m + 1)
-    ax.fill_between(x, np.quantile(arr, Q_LO, 0), np.quantile(arr, Q_HI, 0), color=color, alpha=0.12, lw=0)
+    if band:
+        ax.fill_between(x, np.quantile(arr, Q_LO, 0), np.quantile(arr, Q_HI, 0), color=color, alpha=0.12, lw=0)
     ax.plot(x, np.median(arr, 0), color=color, lw=2, ls=ls, label=label)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
@@ -282,6 +329,7 @@ def plot_learning_curves(entries, reference, key="val_accuracy"):
         ax.set_visible(False)
     ref_hist = [r["history"][key] for r in reference["results"]["runs"] if r.get("history", {}).get(key)] \
         if reference else []
+    hide = constant_keys(entries)
     for ax, method in zip(axes.flat, methods):
         curves = []
         for e in entries:
@@ -291,10 +339,9 @@ def plot_learning_curves(entries, reference, key="val_accuracy"):
                 hs = [r["history"][key] for r in e["results"]["runs"]
                       if float(r["alpha"]) == alpha and r["history"].get(key)]
                 if hs:
-                    label = ", ".join(f"{'α' if k == 'alpha' else k} = {fmt(v)}" for k, v in e["point"].items()) \
-                        or f"α = {fmt(alpha)}"
+                    label = point_label(e, hide, sep=" = ") or f"α = {fmt(alpha)}"
                     curves.append((label, hs))
-        ramp = plt.cm.Blues(np.linspace(0.4, 0.95, max(len(curves), 1)))
+        ramp = method_ramp(method, len(curves))
         for color, (label, hs) in zip(ramp, curves):
             _curve(ax, hs, color, label)
         if ref_hist:
