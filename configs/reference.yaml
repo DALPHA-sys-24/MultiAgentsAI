@@ -1,0 +1,6 @@
+# python -m experiments.reference : grand modèle seul, même architecture élargie,
+# autant de paramètres que num_agents agents réunis.
+defaults: [defaults, datasets/cifar10]
+arch: resnet20
+num_agents: 5
+loss: ce                    # ou same_as_agents : L_k² (forme multiplicative, I_k = 0)

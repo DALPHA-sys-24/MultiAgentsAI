@@ -1,0 +1,20 @@
+# Réglages d'entraînement communs à toutes les expériences (agents, grand modèle, recherche).
+# Les autres fichiers reprennent celui-ci avec « defaults: [defaults] » et changent ce qu'il faut.
+epochs: 200
+batch_size: 128
+optimizer: sgd              # sgd = momentum de Nesterov 0.9
+lr: 0.01
+weight_decay: 0.0005
+wd_exclude_norm_bias: true  # pas de weight decay sur BatchNorm et biais
+optimizer_kwargs: null      # ex. {global_clipnorm: 1.0}
+warmup_epochs: 5
+augment: true               # random crop + flip
+val_size: 5000              # validation tirée du train
+train_subset: null          # N premiers exemples du train (tests rapides)
+n_runs: 3                   # graines 0 à n_runs - 1
+eval_on: final              # test évalué sur les poids finaux (ou best : meilleure val_accuracy)
+checkpoint_every: 1
+precision: float32          # mixed_bfloat16 sur RTX 4060
+jit: auto
+steps_per_execution: 8
+out_dir: results

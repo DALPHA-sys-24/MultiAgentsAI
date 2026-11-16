@@ -40,49 +40,6 @@ def write_json(path: str, payload: dict) -> None:
 
 
 # =============================================================================
-# K AGENTS VS GRAND MODÈLE
-# =============================================================================
-
-def summary_collab(runs: list) -> dict:
-    """Médiane et quantiles 5 % / 95 % sur les graines des métriques à comparer."""
-    rows = {
-        "Grand modèle seul": ([r["big_model"]["accuracy"] for r in runs],
-                             [r["big_model"]["nll"] for r in runs],
-                             [r["big_model"]["ece"] for r in runs]),
-        "Consensus des petits agents": ([r["small_agents"]["accuracy_consensus"] for r in runs],
-                                        [r["small_agents"]["nll_consensus"] for r in runs],
-                                        [r["small_agents"]["ece_consensus"] for r in runs]),
-        "Moyenne simple des petits": ([r["small_agents"]["accuracy_mean_ensemble"] for r in runs], [], []),
-        "Petit agent (médiane)": ([r["small_agents"]["accuracy_agent_median"] for r in runs],
-                                  [float(np.median(r["small_agents"]["nll_agents"])) for r in runs],
-                                  [float(np.median(r["small_agents"]["ece_agents"])) for r in runs]),
-        "Meilleur petit agent": ([r["small_agents"]["accuracy_agent_best"] for r in runs], [], []),
-    }
-    return {name: {"accuracy": summarize(acc),
-                   "nll": summarize(nll) if nll else None,
-                   "ece": summarize(ece) if ece else None}
-            for name, (acc, nll, ece) in rows.items()}
-
-
-def print_collab_table(summary: dict, config, sizes: dict, n_seeds: int, alpha: float = None) -> None:
-    width = 104
-    lines = [
-        "=" * width,
-        f"{config.num_agents} x {config.arch}" + (f" (alpha = {alpha:g})" if alpha is not None else "")
-        + f" ({sizes['small_params_total']:,} param.) "
-        f"vs grand modèle width={sizes['big_width']} ({sizes['big_params']:,} param.) | {n_seeds} graine(s)",
-        "médiane [quantile 5 % ; quantile 95 %] sur les graines",
-        "-" * width,
-        f"{'':30s} {'accuracy':>24s} {'NLL':>24s} {'ECE':>24s}",
-    ]
-    for name, m in summary.items():
-        lines.append(f"{name:30s} {fmt_summary(m['accuracy']):>24s} {fmt_summary(m['nll']):>24s} "
-                     f"{fmt_summary(m['ece']):>24s}")
-    lines.append("=" * width)
-    log.info("\n" + "\n".join(lines))
-
-
-# =============================================================================
 # BALAYAGE DE ALPHA
 # =============================================================================
 

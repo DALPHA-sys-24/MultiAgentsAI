@@ -1,0 +1,17 @@
+# Sensibilité au learning rate : chaque méthode à alpha = 1 pour plusieurs lr ; tous les autres
+# hyperparamètres sont ceux de la recherche. Référence : le grand modèle seul au vrai lr*.
+#   python -m experiments.campaign lr_sweep --list
+#   sbatch --array=0-<N-1> slurm/campaign.sh lr_sweep
+experiment: collaboration
+datasets: [fashion_mnist, cifar10]
+methods: [global_interaction, dml]
+use_tuned_params: true
+settings:
+  arch: resnet20
+  num_agents: 3
+  epochs: 200
+  n_runs: 5
+grid:
+  alpha: [1]
+  lr: [0.1, 0.01, 0.001, 0.0001]
+reference: true

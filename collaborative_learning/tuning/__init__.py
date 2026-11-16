@@ -5,6 +5,6 @@ Recherche d'hyperparamètres avec Optuna.
     pruning.py    callback Keras qui arrête tôt les essais mauvais (pruning)
     study.py      création de l'étude (sampler, pruner, stockage partagé entre jobs) et résumés
 
-Script : experiments/hyperparameter_search.py, config : configs/hyperparameter_search.json.
+Script : experiments/hyperparameter_search.py, config : configs/hyperparameter_search.yaml.
 Optuna n'est importé que par ce package : le reste du code tourne sans lui.
 """

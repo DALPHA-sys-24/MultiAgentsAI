@@ -1,0 +1,16 @@
+# Test rapide en local (quelques minutes sur CPU) : python -m experiments.campaign quick_test --cpu
+experiment: collaboration
+datasets: [fashion_mnist]
+methods: [global_interaction, dml]
+use_tuned_params: false
+settings:
+  arch: resnet20
+  num_agents: 2
+  epochs: 2
+  warmup_epochs: 0
+  train_subset: 500
+  n_runs: 2
+  out_dir: results_quick_test
+grid:
+  alpha: [0, 1]
+reference: true

@@ -1,0 +1,6 @@
+# Agents indépendants : chacun en cross-entropy classique, consensus par vote majoritaire.
+# Une campagne utilise cette méthode pour alpha = 0, quelle que soit la méthode demandée.
+method: independent
+loss_type: independent
+loss_form: additive
+strategy: majority

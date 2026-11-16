@@ -7,9 +7,9 @@ Une expérience = une sous-classe de Experiment qui définit :
     run_task(task, cfg, data, ctx, task_dir, verbose)   une tâche ; renvoie un dict de résultats
     merge(cfg, run_dir, tasks)        rassemble les tâches terminées dans results.json
 
-Organisation des résultats (un dossier par expérience, puis par dataset, puis par variante) :
+Dossier d'un run (lancé seul : results/<expérience>/<dataset>/<variante>/ ; dans une campagne :
+results/<campagne>/<dataset>/<arch>_<K>agents/<méthode>/<point>/, voir experiments/campaign.py) :
 
-    results/<expérience>/<dataset>/<arch>_<K>agents[_<tag>]/
     ├── config.json             réglages, tailles des modèles, environnement (commit Git, versions)
     ├── results.json            résumé sur les runs (médiane, quantiles 5 % / 95 %) et détail par run
     ├── test_probabilities/     probabilités de test de chaque run (.npy), pour les notebooks
@@ -19,6 +19,9 @@ Organisation des résultats (un dossier par expérience, puis par dataset, puis 
 En local, toutes les tâches tournent l'une après l'autre. Sur le cluster, chaque tâche est
 une tâche du job array (--task-index), et toutes écrivent dans le même dossier. Une tâche
 déjà terminée est sautée ; une tâche interrompue reprend à sa dernière époque.
+
+Depuis Python (c'est ce que fait une campagne) :
+    Collaboration().execute(cfg, run_dir, task_index=3)
 """
 import argparse
 import json
@@ -105,9 +108,9 @@ class Experiment:
     # --- ligne de commande ---------------------------------------------------
     def parse_args(self, argv=None):
         p = argparse.ArgumentParser(description=self.DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
-        p.add_argument("--config", help=f"Fichier de config JSON (défaut : configs/{self.NAME}.json).")
+        p.add_argument("--config", help=f"Fichier de config YAML ou JSON (défaut : configs/{self.NAME}.yaml).")
         p.add_argument("--run-dir", metavar="DOSSIER",
-                       help="Dossier du run (défaut : <out_dir>/<expérience>/<dataset>/<arch>_<K>agents[_<tag>]).")
+                       help="Dossier du run (défaut : <out_dir>/<expérience>/<dataset>/<variante>).")
         p.add_argument("--task-index", type=int, metavar="I",
                        help="N'exécute que la tâche I (job array SLURM : $SLURM_ARRAY_TASK_ID).")
         p.add_argument("--list-tasks", action="store_true",
@@ -119,8 +122,8 @@ class Experiment:
         return p.parse_args(normalize_flags(sys.argv[1:] if argv is None else argv))
 
     def load_config(self, args):
-        path = args.config or os.path.join(ROOT, "configs", f"{self.NAME}.json")
-        if not os.path.exists(path):
+        path = args.config or os.path.join(ROOT, "configs", f"{self.NAME}.yaml")
+        if not args.config and not os.path.exists(path):
             path = None
         return load_config(self.CONFIG_CLS, path, overrides_from_args(args, self.CONFIG_CLS)), path
 
@@ -148,8 +151,8 @@ class Experiment:
     @staticmethod
     def write_config(cfg, run_dir: str, **extra) -> None:
         """
-        config.json : réglages actuels ; n_runs / alphas / grand modèle étendus si le dossier en avait
-        plus, et infos des lancements précédents gardées (ex. taille du grand modèle).
+        config.json : réglages actuels ; n_runs / alphas étendus si le dossier en avait plus, et infos
+        des lancements précédents gardées (ex. taille du grand modèle).
         """
         path = os.path.join(run_dir, "config.json")
         payload = {**cfg.to_dict(), **extra}
@@ -157,8 +160,6 @@ class Experiment:
             with open(path) as f:
                 saved = json.load(f)
             payload = {**{k: v for k, v in saved.items() if k not in payload}, **payload}
-            if saved.get("big_model") is True and "big_model" in payload:
-                payload["big_model"] = True
             if isinstance(saved.get("n_runs"), int):
                 payload["n_runs"] = max(saved["n_runs"], payload.get("n_runs") or 0)
             if isinstance(saved.get("alphas"), list) and "alphas" in payload:
@@ -183,11 +184,17 @@ class Experiment:
     def main(self, argv=None):
         args = self.parse_args(argv)
         cfg, path = self.load_config(args)
+        self.execute(cfg, args.run_dir or cfg.run_dir(), task_index=args.task_index, merge_only=args.merge_only,
+                     list_tasks=args.list_tasks, cpu=args.cpu, verbose=args.verbose, config_path=path)
+
+    def execute(self, cfg, run_dir: str, *, task_index: Optional[int] = None, merge_only: bool = False,
+                list_tasks: bool = False, cpu: bool = False, verbose: int = 2, config_path: Optional[str] = None):
+        """Exécute une tâche (task_index), toutes les tâches, ou seulement la fusion, dans run_dir."""
+        path = config_path
         tasks = self.tasks(cfg)
-        run_dir = args.run_dir or cfg.run_dir()
         self.run_dir = run_dir
 
-        if args.list_tasks:
+        if list_tasks:
             # avant de soumettre (nœud de connexion) : réglages compatibles avec le dossier, et
             # données téléchargées une fois (les nœuds de calcul n'ont souvent pas Internet)
             self.check_run_dir(cfg, run_dir)
@@ -196,7 +203,10 @@ class Experiment:
             return
 
         saved_path = os.path.join(run_dir, "config.json")
-        if args.merge_only and os.path.exists(saved_path):
+        if merge_only and not os.path.exists(saved_path):
+            log.info("Rien à fusionner dans %s (aucune tâche lancée).", run_dir)
+            return
+        if merge_only:
             # fusion : réglages enregistrés dans le dossier (pas besoin de redonner les mêmes options)
             with open(saved_path) as f:
                 cfg = config_from_dict(self.CONFIG_CLS, json.load(f), strict=False).validate()
@@ -205,19 +215,19 @@ class Experiment:
         log.info("[config] %s", os.path.abspath(path) if path else "aucun fichier, valeurs par défaut")
         self.check_run_dir(cfg, run_dir)
         os.makedirs(run_dir, exist_ok=True)
-        tag = "merge" if args.merge_only else ("all" if args.task_index is None else f"task_{args.task_index:03d}")
+        tag = "merge" if merge_only else ("all" if task_index is None else f"task_{task_index:03d}")
         setup_logging(os.path.join(run_dir, "logs"), filename=f"{tag}.txt")
         log.info("[run] %s | %d tâche(s)", os.path.abspath(run_dir), len(tasks))
 
-        if args.merge_only:
+        if merge_only:
             self._merge(cfg, run_dir)
             return
 
-        if args.task_index is not None:
-            if not 0 <= args.task_index < len(tasks):
-                log.info("Tâche %d hors de la liste (%d tâches) : rien à faire.", args.task_index, len(tasks))
+        if task_index is not None:
+            if not 0 <= task_index < len(tasks):
+                log.info("Tâche %d hors de la liste (%d tâches) : rien à faire.", task_index, len(tasks))
                 return
-            selected = [tasks[args.task_index]]
+            selected = [tasks[task_index]]
         else:
             selected = tasks
         todo = [t for t in selected if not self.is_done(os.path.join(run_dir, TASKS_DIR, t.id))]
@@ -226,7 +236,7 @@ class Experiment:
             self._merge(cfg, run_dir)
             return
 
-        device = configure_device(force_cpu=args.cpu, precision=cfg.precision)
+        device = configure_device(force_cpu=cpu, precision=cfg.precision)
         data = load_dataset(cfg.dataset, val_size=cfg.val_size, seed=0)
         if cfg.train_subset:
             data["x_train"] = data["x_train"][:cfg.train_subset]
@@ -241,7 +251,7 @@ class Experiment:
                     os.makedirs(task_dir, exist_ok=True)
                 log.info("=== tâche %s %s ===", task.id, json.dumps(task.params))
                 t0 = time.time()
-                result = self.run_task(task, cfg, data, ctx, task_dir, args.verbose)
+                result = self.run_task(task, cfg, data, ctx, task_dir, verbose)
                 cleanup()  # libère les modèles (sinon la RAM grossit à chaque tâche)
                 if result is not None:
                     write_json(os.path.join(task_dir, "result.json"),

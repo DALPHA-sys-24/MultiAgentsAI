@@ -1,0 +1,8 @@
+# python -m experiments.collaboration (sans campagne) : K agents pour chaque alpha de « alphas ».
+# alpha = 0 : agents indépendants (cross-entropy, vote majoritaire). Grand modèle : configs/reference.yaml.
+defaults: [defaults, datasets/cifar10, methods/global_interaction]
+arch: resnet20
+num_agents: 5
+alphas: [0, 1, 10]
+temperature: 1.0
+per_agent_views: false

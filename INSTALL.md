@@ -45,6 +45,16 @@ La ligne `[device]` au démarrage doit afficher le GPU. À chaque nouvelle sessi
 
 ## 3. GPU sur le cluster (Linux)
 
+Sur Lyra, pas d'environnement virtuel : `slurm/campaign.sh` charge les modules listés dans `slurm/modules.sh` (TensorFlow 2.15, matplotlib, Optuna, PyYAML). Vérifier une fois depuis le nœud de connexion :
+
+```bash
+source slurm/modules.sh && python -m experiments.campaign quick_test --list
+```
+
+Si PyYAML manque, le script le dit : ajouter le bon module (`module spider PyYAML`) dans `slurm/modules.sh`, ou `pip install --user pyyaml`.
+
+Ailleurs, avec un environnement virtuel :
+
 ```bash
 module load Python/3.12          # nom exact selon le cluster : module avail python
 python3 -m venv ~/venvs/collab-gpu

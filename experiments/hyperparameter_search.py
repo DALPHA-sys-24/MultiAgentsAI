@@ -5,26 +5,27 @@ Chaque essai tire des hyperparamètres dans `search_space` (lr, weight decay, op
 entraîne un seul modèle `arch` et mesure son accuracy de validation à chaque époque. Les essais
 mauvais sont arrêtés tôt (pruning) ; le test n'est jamais utilisé. Pas d'agents ni d'alpha ici.
 
-Avec les meilleurs paramètres, le script écrit une config prête pour construire ensuite
-K agents de cette architecture (tuned_collaboration.json) :
-    python -m experiments.collaboration --config results/hyperparameter_search/<dataset>/<arch>/tuned_collaboration.json --num-agents 3
+Avec les meilleurs paramètres, le script écrit tuned_params.yaml (optimiseur, lr, weight decay,
+batch...), repris automatiquement par les campagnes qui ont « use_tuned_params: true »
+(agents et grand modèle), ou à la main :
+    python -m experiments.collaboration --config results/hyperparameter_search/<dataset>/<arch>/tuned_params.yaml
 
 Une tâche = un worker qui lance `n_trials` essais. Les `n_workers` workers partagent la même
 étude (study.journal) : sur le cluster, ils tournent en parallèle dans un job array, et
 chaque relance ajoute des essais à la recherche existante.
 
 Exemples (depuis la racine du dépôt) :
-    python -m experiments.hyperparameter_search                        # configs/hyperparameter_search.json
+    python -m experiments.hyperparameter_search                        # configs/hyperparameter_search.yaml
     python -m experiments.hyperparameter_search --dataset cifar10 --arch resnet32 --n-trials 50
     python -m experiments.hyperparameter_search --cpu --train-subset 2000 --epochs 3 --n-trials 2 --n-workers 1
-    sbatch slurm/hyperparameter_search.sh    # cluster (réglages en tête du script)
+    python -m experiments.campaign hyperparameter_search --list          # cluster : voir configs/campaigns/
 
 Sorties : results/hyperparameter_search/<dataset>/<arch>[_<tag>]/
     config.json              config de la recherche et environnement (commit Git, versions)
     study.journal            l'étude Optuna (partagée par les workers)
     trials.csv               un essai par ligne : valeur, état (COMPLETE / PRUNED / FAIL), paramètres
     best.json                meilleur essai, ses paramètres, importance de chaque hyperparamètre
-    tuned_collaboration.json config collaboration avec ces paramètres (K agents : --num-agents)
+    tuned_params.yaml        meilleurs paramètres d'entraînement (repris par les campagnes)
     trials/                  historique par époque (.csv) de chaque essai
     logs/                    journaux (sorties SLURM dans slurm_logs/ à la racine)
 """
@@ -34,18 +35,20 @@ import os
 
 import tensorflow as tf
 
-from collaborative_learning.evaluation.reporting import write_json
 from collaborative_learning.training.runner import cleanup, count_trainable_params, run_single_reference
 from collaborative_learning.tuning.pruning import OptunaPruningCallback
 from collaborative_learning.tuning.space import decode_params, suggest
 from collaborative_learning.tuning.study import create_study, export_results
-from collaborative_learning.utils.config import CollaborationConfig, HyperparamSearchConfig, load_config
-from experiments.common import ROOT, Experiment, Task, log
+from collaborative_learning.utils.config import CollaborationConfig, HyperparamSearchConfig
+from collaborative_learning.utils.config_files import write_yaml
+from experiments.common import Experiment, Task, log
 
-# Réglages du modèle repris dans la config K agents (les époques finales restent celles du fichier
-# de l'expérience : les essais sont courts)
-TRANSFERRED = ("dataset", "batch_size", "optimizer", "lr", "weight_decay", "wd_exclude_norm_bias",
+# Réglages d'entraînement repris par les K agents et le grand modèle (les époques finales restent
+# celles de la campagne : les essais sont courts)
+TRANSFERRED = ("batch_size", "optimizer", "lr", "weight_decay", "wd_exclude_norm_bias",
                "optimizer_kwargs", "warmup_epochs", "augment", "val_size", "precision")
+TUNED_FILE = "tuned_params.yaml"
+LEGACY_TUNED_FILE = "tuned_collaboration.json"     # avant le 2026-11-15 (config K agents complète)
 
 
 def make_objective(data: dict, cfg: HyperparamSearchConfig, trials_dir: str, verbose: int):
@@ -79,20 +82,12 @@ def make_objective(data: dict, cfg: HyperparamSearchConfig, trials_dir: str, ver
     return objective
 
 
-def multi_agent_config(cfg: HyperparamSearchConfig, best_params: dict, cls=CollaborationConfig) -> dict:
-    """
-    Config de l'expérience à K agents (cls) : celle de configs/<expérience>.json, avec
-    l'architecture, le jeu de données et les meilleurs paramètres du modèle seul.
-    """
+def tuned_params(cfg: HyperparamSearchConfig, best_params: dict) -> dict:
+    """Réglages d'entraînement du meilleur essai : ceux de TRANSFERRED et ceux qui ont été cherchés."""
     best = dataclasses.replace(cfg, **best_params)
-    path = os.path.join(ROOT, "configs", f"{cls.EXPERIMENT}.json")
-    base = load_config(cls, path if os.path.exists(path) else None)
-    keys = set(TRANSFERRED) | (set(best_params) & {f.name for f in dataclasses.fields(cls)})
-    values = {k: getattr(best, k) for k in keys}
-    out = {"_note": f"Paramètres du meilleur {cfg.arch} seul sur {cfg.dataset} (experiments.hyperparameter_search). "
-                    "Choisir K avec --num-agents ; vérifier epochs.",
-           **dataclasses.asdict(dataclasses.replace(base, **values, arch=cfg.arch, tag="tuned"))}
-    return out
+    fields = {f.name for f in dataclasses.fields(CollaborationConfig)}
+    keys = [k for k in TRANSFERRED] + [k for k in best_params if k in fields and k not in TRANSFERRED]
+    return {k: getattr(best, k) for k in keys}
 
 
 class HyperparameterSearch(Experiment):
@@ -151,15 +146,17 @@ class HyperparameterSearch(Experiment):
         log.info("\n".join(lines))
         if "best_params" not in summary:
             return
-        path = os.path.join(run_dir, f"tuned_{CollaborationConfig.EXPERIMENT}.json")
-        write_json(path, multi_agent_config(cfg, summary["best_params"]))
+        path = os.path.join(run_dir, TUNED_FILE)
+        write_yaml(path, tuned_params(cfg, summary["best_params"]),
+                   header=f"Meilleurs paramètres d'un {cfg.arch} seul sur {cfg.dataset} (essai #{summary['best_trial']}, "
+                          f"{cfg.metric} = {summary['best_value']:.4f}).\n"
+                          "Repris par les campagnes avec use_tuned_params: true (agents et grand modèle).")
         log.info("Meilleur essai #%d : %s = %.4f avec %s", summary["best_trial"], cfg.metric,
                  summary["best_value"], json.dumps(summary["best_params"]))
         if "param_importances" in summary:
             log.info("Importance des hyperparamètres : %s", ", ".join(
                 f"{k} {v:.2f}" for k, v in summary["param_importances"].items()))
-        log.info("Construire K agents avec ces paramètres :\n  python -m experiments.collaboration --config %s "
-                 "--num-agents <K>", path)
+        log.info("Paramètres écrits dans %s (repris par les campagnes avec use_tuned_params: true)", path)
 
 
 if __name__ == "__main__":

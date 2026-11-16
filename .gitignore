@@ -14,6 +14,7 @@ venv*/
 
 # Résultats et journaux (trop gros pour Git ; à sauvegarder à part)
 results/
+results_quick_test/
 runs/
 slurm_logs/*
 !slurm_logs/.keep

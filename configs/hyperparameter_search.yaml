@@ -1,0 +1,22 @@
+# python -m experiments.hyperparameter_search : meilleurs hyperparamètres d'UN modèle (Optuna).
+# Les meilleurs paramètres sont écrits dans results/hyperparameter_search/<dataset>/<arch>/tuned_params.yaml
+# et repris par les campagnes qui ont « use_tuned_params: true ».
+defaults: [defaults, datasets/fashion_mnist]
+arch: resnet20
+loss: ce
+loss_form: multiplicative
+epochs: 20                  # par essai
+warmup_epochs: 1
+n_runs: 1
+n_workers: 4
+n_trials: 30                # par worker
+timeout_hours: null
+metric: val_accuracy
+sampler: tpe
+pruner: median
+pruner_warmup_epochs: 3
+study_seed: 0
+search_space:
+  lr: {type: float, low: 0.0001, high: 0.3, log: true}
+  weight_decay: {type: float, low: 0.00001, high: 0.01, log: true}
+  optimizer: {type: categorical, choices: [sgd, adam, adamw]}

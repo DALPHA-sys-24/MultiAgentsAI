@@ -1,0 +1,5 @@
+# Méthode proposée : interaction globale, forme multiplicative L_k * (L_k + alpha * I_k)
+method: global_interaction
+loss_type: global_interaction
+loss_form: multiplicative
+strategy: simplicial

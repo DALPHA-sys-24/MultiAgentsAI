@@ -1,0 +1,5 @@
+# Deep Mutual Learning (Zhang et al., 2018) : L_k + alpha * moyenne des KL(y^j || y^k) ; alpha = 1 : DML classique
+method: dml
+loss_type: dml
+loss_form: additive
+strategy: simplicial

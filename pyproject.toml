@@ -1,6 +1,6 @@
 [project]
 name = "collaborative_learning"
-version = "0.5.0"
+version = "0.6.0"
 description = "Apprentissage collaboratif multi-agents (Deep Mutual Learning) avec ResNet / MobileNet"
 requires-python = ">=3.10"
 

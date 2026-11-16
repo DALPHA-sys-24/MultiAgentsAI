@@ -1,31 +1,26 @@
 """
-Figures et tableau récapitulatif des résultats de experiments.collaboration, sans Jupyter.
+Figures et tableau récapitulatif d'une campagne (ou de dossiers donnés à la main), sans Jupyter.
 
-Un « groupe » = tous les dossiers results/collaboration/<dataset>/<arch>_<K>agents[_<tag>]/ (ta méthode,
-DML, variantes _tuned...), comparés entre eux. Toutes les statistiques sont des médianes avec la bande
-des quantiles 5 % / 95 % sur les graines. Sorties dans results/comparisons/<dataset>/<arch>_<K>agents/ :
+Pour chaque groupe (dataset, arch, K) d'une campagne, dans results/<campagne>/<dataset>/<arch>_<K>agents/figures/ :
 
-    summary.csv                     une ligne par (dossier, alpha) et par grand modèle
-    accuracy_vs_alpha.png/.pdf      consensus et agent médian selon alpha, grand modèle en référence
-    paired_difference.png/.pdf      écart de chaque méthode avec la référence, graine par graine
-    diversity_vs_alpha.png/.pdf     désaccord entre agents selon alpha
-    learning_curves.png/.pdf        accuracy de validation par époque
-    accuracy_vs_lr.png/.pdf         si une méthode a été lancée avec plusieurs lr (slurm/collaboration_lr.sh) :
-                                    consensus et agent médian selon le lr, grand modèle (lr*) en référence
-    diversity_vs_lr.png/.pdf        désaccord entre agents selon le lr
+    summary.csv                      une ligne par (méthode, point de la grille) et pour le grand modèle
+    accuracy_vs_<param>.png/.pdf     consensus et agent médian selon chaque paramètre balayé (alpha, lr...),
+                                     une courbe par méthode, grand modèle seul en pointillés
+    diversity_vs_<param>.png/.pdf    désaccord entre agents selon ce paramètre
+    paired_difference.png/.pdf       écart d'accuracy avec le grand modèle, graine par graine
+    learning_curves.png/.pdf         accuracy de validation par époque, un panneau par méthode
 
-Les figures selon alpha ne sont faites que s'il y a au moins deux valeurs de alpha.
+Toutes les statistiques : médiane et bande des quantiles 5 % / 95 % sur les graines.
 
-    from collaborative_learning.evaluation.plots import plot_group
-    plot_group("results", "cifar10", "resnet20", 3)
+    from collaborative_learning.evaluation.plots import plot_campaign, plot_run_dirs
+    plot_campaign(Campaign("lr_sweep"))
+    plot_run_dirs(["results/.../dml/alpha1", "results/.../dml/alpha10"], reference_dir=..., out_dir="figures")
 """
 import csv
-import glob
-import re
 import json
 import logging
 import os
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -33,73 +28,57 @@ log = logging.getLogger(__name__)
 logging.getLogger("fontTools").setLevel(logging.WARNING)   # sinon le sous-ensemble de polices du PDF remplit les logs
 
 Q_LO, Q_HI = 0.05, 0.95
-# Palette catégorielle (une couleur par dossier) ; gris foncé pour le grand modèle
+# Palette catégorielle (une couleur par méthode) ; gris foncé pour le grand modèle
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#9b59b6", "#c9a227", "#d6457a", "#4b5563"]
 BIG_COLOR = "#3a3935"
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e0", "#ffffff"
-FORM_SHORT = {"multiplicative": "mult.", "additive": "add."}
+INDEPENDENT = "independent"
+METHOD_LABELS = {"global_interaction": "interaction globale", "dml": "DML", INDEPENDENT: "agents indépendants"}
+PARAM_LABELS = {"alpha": "alpha  (0 = agents indépendants, cross-entropy + vote majoritaire)",
+                "lr": "learning rate des agents (échelle log)"}
+LOG_PARAMS = ("lr", "weight_decay")
 
 
 # =============================================================================
 # LECTURE
 # =============================================================================
 
-def group_dirs(results_root: str, dataset: str, arch: str, num_agents: int) -> List[str]:
-    """Dossiers results/collaboration/<dataset>/<arch>_<K>agents[_<tag>] qui ont un results.json."""
-    base = os.path.join(results_root, "collaboration", dataset, f"{arch}_{num_agents}agents")
-    dirs = [base] + sorted(glob.glob(base + "_*"))
-    return [d for d in dirs if os.path.exists(os.path.join(d, "results.json"))]
+def _read_json(path: str) -> Optional[dict]:
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
 
 
-def all_groups(results_root: str) -> List[tuple]:
-    """Tous les (dataset, arch, K) présents sous results/collaboration/."""
-    groups = set()
-    for path in glob.glob(os.path.join(results_root, "collaboration", "*", "*", "config.json")):
-        try:
-            with open(path) as f:
-                cfg = json.load(f)
-            groups.add((cfg["dataset"], cfg["arch"], int(cfg["num_agents"])))
-        except (KeyError, ValueError, json.JSONDecodeError):
-            continue
-    return sorted(groups)
+METHOD_ORDER = ["global_interaction", "dml", INDEPENDENT]   # même couleur d'une figure à l'autre
 
 
-def method_label(cfg: dict) -> str:
-    loss = cfg.get("loss_type", "?")
-    name = "DML" if loss == "dml" else loss
-    label = f"{name} ({FORM_SHORT.get(cfg.get('loss_form'), cfg.get('loss_form'))})"
-    tag = cfg.get("tag")
-    extra = [t for t in (tag or "").split("_") if t and t != "dml"] if tag else []
-    return label + (f" [{'_'.join(extra)}]" if extra else "")
+def method_label(method: str) -> str:
+    return METHOD_LABELS.get(method, method)
 
 
-LR_TAG = re.compile(r"^lr[0-9.e-]+$")
+def method_color(method: str) -> str:
+    if method not in METHOD_ORDER:
+        METHOD_ORDER.append(method)
+    return COLORS[METHOD_ORDER.index(method) % len(COLORS)]
 
 
-def method_key(cfg: dict) -> str:
-    """Nom de la méthode sans le lr (le tag lr<valeur> de slurm/collaboration_lr.sh est retiré)."""
-    loss = cfg.get("loss_type", "?")
-    name = "DML" if loss == "dml" else loss
-    label = f"{name} ({FORM_SHORT.get(cfg.get('loss_form'), cfg.get('loss_form'))})"
-    extra = [t for t in (cfg.get("tag") or "").split("_") if t and t != "dml" and not LR_TAG.match(t)]
-    return label + (f" [{'_'.join(extra)}]" if extra else "")
+def load_entry(run_dir: str, method: Optional[str] = None, point: Optional[Dict[str, Any]] = None) -> Optional[dict]:
+    """Un dossier de K agents fusionné : config, résultats, méthode et valeurs de la grille."""
+    cfg, res = _read_json(os.path.join(run_dir, "config.json")), _read_json(os.path.join(run_dir, "results.json"))
+    if cfg is None or res is None or not res.get("runs"):
+        return None
+    method = method or res.get("method") or cfg.get("method") or f"{cfg.get('loss_type')}_{cfg.get('loss_form')}"
+    return {"dir": run_dir, "config": cfg, "results": res, "method": method, "point": dict(point or {})}
 
 
-def lr_value(cfg: dict) -> Optional[float]:
-    """lr des agents (None s'il y a un lr différent par agent)."""
-    lr = cfg.get("lr")
-    if isinstance(lr, list):
-        return float(lr[0]) if len(set(lr)) == 1 else None
-    return None if lr is None else float(lr)
-
-
-def load_run(run_dir: str) -> dict:
-    with open(os.path.join(run_dir, "config.json")) as f:
-        cfg = json.load(f)
-    with open(os.path.join(run_dir, "results.json")) as f:
-        res = json.load(f)
-    return {"dir": run_dir, "name": os.path.basename(run_dir), "config": cfg, "results": res,
-            "label": method_label(cfg), "method": method_key(cfg), "lr": lr_value(cfg)}
+def load_reference(run_dir: Optional[str]) -> Optional[dict]:
+    if not run_dir:
+        return None
+    cfg, res = _read_json(os.path.join(run_dir, "config.json")), _read_json(os.path.join(run_dir, "results.json"))
+    if cfg is None or res is None or not res.get("runs"):
+        return None
+    return {"dir": run_dir, "config": cfg, "results": res, "lr": cfg.get("lr")}
 
 
 def stats(values) -> tuple:
@@ -107,6 +86,25 @@ def stats(values) -> tuple:
     if not len(v):
         return (np.nan, np.nan, np.nan)
     return float(np.median(v)), float(np.quantile(v, Q_LO)), float(np.quantile(v, Q_HI))
+
+
+def rows_of(entry: dict) -> List[dict]:
+    """Une ligne par (alpha, graine), avec les valeurs de la grille du dossier."""
+    out = []
+    for r in entry["results"]["runs"]:
+        row = dict(r)
+        row.update({k: v for k, v in entry["point"].items() if k != "alpha"})
+        out.append(row)
+    return out
+
+
+def value_of(entry: dict, row: dict, param: str):
+    if param == "alpha":
+        return float(row["alpha"])
+    if param in entry["point"]:
+        return entry["point"][param]
+    value = entry["config"].get(param)
+    return value[0] if isinstance(value, list) and len(set(map(str, value))) == 1 else value
 
 
 # =============================================================================
@@ -124,7 +122,7 @@ def _style(ax, grid_axis="y"):
 
 
 def _save(fig, out_dir: str, name: str, formats: Sequence[str]) -> List[str]:
-    """Écriture atomique (deux jobs de fusion peuvent écrire la même figure en même temps)."""
+    """Écriture atomique (fichier temporaire puis remplacement)."""
     paths = []
     for fmt in formats:
         path = os.path.join(out_dir, f"{name}.{fmt}")
@@ -135,40 +133,71 @@ def _save(fig, out_dir: str, name: str, formats: Sequence[str]) -> List[str]:
     return paths
 
 
-def _alpha_axis(ax, alphas):
-    ax.set_xticks(range(len(alphas)), [f"{a:g}" for a in alphas])
-    ax.set_xlabel("alpha  (0 = agents indépendants, cross-entropy + vote majoritaire)", color=INK)
-    ax.set_xlim(-0.3, len(alphas) - 0.7)
+def _reference_band(ax, reference, key="accuracy", scale=100):
+    if not reference:
+        return
+    m, lo, hi = stats([r[key] * scale for r in reference["results"]["runs"] if r.get(key) is not None])
+    ax.axhspan(lo, hi, color=BIG_COLOR, alpha=0.08, lw=0)
+    lr = reference.get("lr")
+    label = "grand modèle seul" + (f" (lr* = {lr:g})" if isinstance(lr, (int, float)) else "")
+    ax.axhline(m, color=BIG_COLOR, ls=":", lw=2, label=label)
 
 
-def _big_model_band(ax, runs, key="accuracy", scale=100):
-    for run in runs:
-        big = run["results"].get("big_model")
-        if big:
-            m, lo, hi = stats([r[key] * scale for r in big["runs"]])
-            ax.axhspan(lo, hi, color=BIG_COLOR, alpha=0.08, lw=0)
-            ax.axhline(m, color=BIG_COLOR, ls=":", lw=2, label="grand modèle seul")
-            return
+def series_by_method(entries, param: str, other_params: Sequence[str]) -> Dict[str, Dict[Any, list]]:
+    """
+    {libellé de courbe: {valeur du paramètre: [lignes]}}. Une courbe par méthode (et par valeur des
+    autres paramètres balayés). En abscisse alpha, les agents indépendants (alpha = 0) sont le premier
+    point de chaque méthode.
+    """
+    series: Dict[str, Dict[Any, list]] = {}
+    others = [e for e in entries if e["method"] != INDEPENDENT]
+    share_independent = param == "alpha" and bool(others)
+    methods = []
+    for e in others:
+        if e["method"] not in methods:
+            methods.append(e["method"])
+
+    def label_of(method, e, row):
+        fixed = ", ".join(f"{p} = {fmt(value_of(e, row, p))}" for p in other_params)
+        return method, method_label(method) + (f" ({fixed})" if fixed else "")
+
+    for e in entries:
+        for row in rows_of(e):
+            targets = methods if (share_independent and e["method"] == INDEPENDENT) else [e["method"]]
+            for method in targets:
+                series.setdefault(label_of(method, e, row), {}).setdefault(value_of(e, row, param), []).append(row)
+    return series
 
 
-def plot_vs_alpha(runs, alphas, keys, titles, ylabel, scale=100, big_key=None):
+def fmt(value) -> str:
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def plot_vs_param(entries, reference, param, keys, titles, ylabel, other_params=(), scale=100, show_reference=True):
     import matplotlib.pyplot as plt
+    series = series_by_method(entries, param, other_params)
+    by_method_color = len({m for m, _ in series}) == len(series)   # une courbe par méthode : sa couleur
+    values = sorted({v for s in series.values() for v in s})
+    log_x = param in LOG_PARAMS and all(isinstance(v, (int, float)) and v > 0 for v in values)
     fig, axes = plt.subplots(1, len(keys), figsize=(6.2 * len(keys), 4.2), squeeze=False, sharey=True)
     for ax, key, title in zip(axes[0], keys, titles):
-        for i, run in enumerate(runs):
-            color = COLORS[i % len(COLORS)]
-            by_alpha = {}
-            for r in run["results"]["runs"]:
-                by_alpha.setdefault(float(r["alpha"]), []).append(r.get(key))
-            xs = [j for j, a in enumerate(alphas) if a in by_alpha]
-            if not xs:
-                continue
-            s = np.array([stats([v * scale for v in by_alpha[alphas[j]] if v is not None]) for j in xs])
-            ax.fill_between(xs, s[:, 1], s[:, 2], color=color, alpha=0.15, lw=0)
-            ax.plot(xs, s[:, 0], color=color, marker="o", ms=6, mec=SURFACE, mew=1.2, lw=2, label=run["label"])
-        if big_key:
-            _big_model_band(ax, runs, big_key, scale)
-        _alpha_axis(ax, alphas)
+        for i, ((method, label), by_value) in enumerate(series.items()):
+            color = method_color(method) if by_method_color else COLORS[i % len(COLORS)]
+            xs = sorted(by_value)
+            s = np.array([stats([r.get(key) * scale for r in by_value[x] if r.get(key) is not None]) for x in xs])
+            pos = xs if log_x else [values.index(x) for x in xs]
+            ax.fill_between(pos, s[:, 1], s[:, 2], color=color, alpha=0.15, lw=0)
+            ax.plot(pos, s[:, 0], color=color, marker="o", ms=6, mec=SURFACE, mew=1.2, lw=2, label=label)
+        if show_reference:
+            _reference_band(ax, reference)
+        if log_x:
+            ax.set_xscale("log")
+            ax.set_xticks(values, [fmt(v) for v in values])
+            ax.minorticks_off()
+        else:
+            ax.set_xticks(range(len(values)), [fmt(v) for v in values])
+            ax.set_xlim(-0.3, len(values) - 0.7)
+        ax.set_xlabel(PARAM_LABELS.get(param, param), color=INK)
         ax.set_title(title, color=INK, loc="left", fontweight="bold")
         _style(ax)
     axes[0][0].set_ylabel(ylabel, color=INK)
@@ -178,45 +207,39 @@ def plot_vs_alpha(runs, alphas, keys, titles, ylabel, scale=100, big_key=None):
     return fig
 
 
-def paired_rows(runs) -> tuple:
-    """Écart d'accuracy (consensus) avec la référence, graine par graine. Référence : grand modèle, sinon alpha = 0."""
-    ref_name, ref = None, None
-    for run in runs:
-        big = run["results"].get("big_model")
-        if big:
-            ref_name, ref = "grand modèle seul", {r["seed"]: r["accuracy"] for r in big["runs"]}
-            break
-    if ref is None:
-        for run in runs:
-            base = [r for r in run["results"]["runs"] if float(r["alpha"]) == 0.0]
-            if base:
-                ref_name = f"{run['label']} α=0"
-                ref = {r["seed"]: r["accuracy_consensus"] for r in base}
-                break
-    rows = []
-    if ref is None:
-        return ref_name, rows
-    for i, run in enumerate(runs):
-        by_alpha = {}
-        for r in run["results"]["runs"]:
-            by_alpha.setdefault(float(r["alpha"]), []).append(r)
-        for a in sorted(by_alpha):
-            name = f"{run['label']} α={a:g}"
-            if name == ref_name:
-                continue
-            diffs = [(r["accuracy_consensus"] - ref[r["seed"]]) * 100 for r in by_alpha[a] if r["seed"] in ref]
-            if diffs:
-                rows.append((name, COLORS[i % len(COLORS)], np.array(diffs)))
-    return ref_name, rows
+def entry_name(e: dict) -> str:
+    point = ", ".join(f"{'α' if k == 'alpha' else k}={fmt(v)}" for k, v in e["point"].items())
+    if not point:
+        alphas = sorted({float(r["alpha"]) for r in e["results"]["runs"]})
+        point = "α=" + "/".join(fmt(a) for a in alphas)
+    return f"{method_label(e['method'])} {point}"
 
 
-def plot_paired(runs):
+def plot_paired(entries, reference):
+    """Écart d'accuracy du consensus avec le grand modèle (sinon les agents indépendants), même graine."""
     import matplotlib.pyplot as plt
-    ref_name, rows = paired_rows(runs)
+    if reference:
+        ref_name = "grand modèle seul"
+        ref = {r["seed"]: r["accuracy"] for r in reference["results"]["runs"]}
+    else:
+        base = [r for e in entries if e["method"] == INDEPENDENT for r in e["results"]["runs"]]
+        if not base:
+            return None
+        ref_name, ref = "agents indépendants", {r["seed"]: r["accuracy_consensus"] for r in base}
+    rows = []
+    for e in entries:
+        if not reference and e["method"] == INDEPENDENT:
+            continue
+        for alpha in sorted({float(r["alpha"]) for r in e["results"]["runs"]}):
+            diffs = [(r["accuracy_consensus"] - ref[r["seed"]]) * 100
+                     for r in e["results"]["runs"] if float(r["alpha"]) == alpha and r["seed"] in ref]
+            if diffs:
+                name = entry_name(e) if e["point"] else f"{method_label(e['method'])} α={fmt(alpha)}"
+                rows.append((name, method_color(e["method"]), np.array(diffs)))
     if not rows:
         return None
-    rows = sorted(rows, key=lambda r: np.median(r[2]))
-    fig, ax = plt.subplots(figsize=(8, 0.5 * len(rows) + 1.5))
+    rows.sort(key=lambda r: np.median(r[2]))
+    fig, ax = plt.subplots(figsize=(8, 0.45 * len(rows) + 1.5))
     for i, (name, color, diffs) in enumerate(rows):
         jitter = np.linspace(-0.15, 0.15, len(diffs)) if len(diffs) > 1 else [0.0]
         ax.plot(diffs, i + np.asarray(jitter), "o", ms=7, color=color, mec=SURFACE, mew=1.5)
@@ -234,101 +257,54 @@ def plot_paired(runs):
     return fig
 
 
-def plot_learning_curves(runs, key="val_accuracy"):
-    import matplotlib.pyplot as plt
+def _curve(ax, histories, color, label, ls="-"):
     from matplotlib.ticker import MaxNLocator
-    n = len(runs)
+    m = min(len(h) for h in histories)
+    arr = np.array([h[:m] for h in histories]) * 100
+    x = np.arange(1, m + 1)
+    ax.fill_between(x, np.quantile(arr, Q_LO, 0), np.quantile(arr, Q_HI, 0), color=color, alpha=0.12, lw=0)
+    ax.plot(x, np.median(arr, 0), color=color, lw=2, ls=ls, label=label)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+
+def plot_learning_curves(entries, reference, key="val_accuracy"):
+    """Un panneau par méthode, une courbe par point de la grille (bleu clair -> foncé), grand modèle en pointillés."""
+    import matplotlib.pyplot as plt
+    methods = []
+    for e in entries:
+        if e["method"] not in methods:
+            methods.append(e["method"])
+    n = len(methods)
     ncols = min(n, 3)
     nrows = (n + ncols - 1) // ncols
     fig, axes = plt.subplots(nrows, ncols, figsize=(5.8 * ncols, 4 * nrows), squeeze=False, sharey=True)
     for ax in axes.flat[n:]:
         ax.set_visible(False)
-    for ax, run in zip(axes.flat, runs):
-        by_alpha = {}
-        for r in run["results"]["runs"]:
-            if r["history"].get(key):
-                by_alpha.setdefault(float(r["alpha"]), []).append(r["history"][key])
-        ramp = plt.cm.Blues(np.linspace(0.4, 0.95, max(len(by_alpha), 1)))
-        for color, a in zip(ramp, sorted(by_alpha)):
-            m = min(len(h) for h in by_alpha[a])
-            arr = np.array([h[:m] for h in by_alpha[a]]) * 100
-            x = np.arange(1, m + 1)
-            ax.fill_between(x, np.quantile(arr, Q_LO, 0), np.quantile(arr, Q_HI, 0), color=color, alpha=0.15, lw=0)
-            ax.plot(x, np.median(arr, 0), color=color, lw=2, label=f"α = {a:g}")
-        big = run["results"].get("big_model")
-        if big:
-            hs = [r["history"][key] for r in big["runs"] if r["history"].get(key)]
-            if hs:
-                m = min(len(h) for h in hs)
-                arr = np.array([h[:m] for h in hs]) * 100
-                x = np.arange(1, m + 1)
-                ax.fill_between(x, np.quantile(arr, Q_LO, 0), np.quantile(arr, Q_HI, 0), color=BIG_COLOR, alpha=0.1, lw=0)
-                ax.plot(x, np.median(arr, 0), color=BIG_COLOR, ls=":", lw=2, label="grand modèle")
-        ax.set_title(run["label"] if run["results"]["runs"] else f"grand modèle seul [{run['name']}]",
-                     color=INK, loc="left", fontweight="bold")
+    ref_hist = [r["history"][key] for r in reference["results"]["runs"] if r.get("history", {}).get(key)] \
+        if reference else []
+    for ax, method in zip(axes.flat, methods):
+        curves = []
+        for e in entries:
+            if e["method"] != method:
+                continue
+            for alpha in sorted({float(r["alpha"]) for r in e["results"]["runs"]}):
+                hs = [r["history"][key] for r in e["results"]["runs"]
+                      if float(r["alpha"]) == alpha and r["history"].get(key)]
+                if hs:
+                    label = ", ".join(f"{'α' if k == 'alpha' else k} = {fmt(v)}" for k, v in e["point"].items()) \
+                        or f"α = {fmt(alpha)}"
+                    curves.append((label, hs))
+        ramp = plt.cm.Blues(np.linspace(0.4, 0.95, max(len(curves), 1)))
+        for color, (label, hs) in zip(ramp, curves):
+            _curve(ax, hs, color, label)
+        if ref_hist:
+            _curve(ax, ref_hist, BIG_COLOR, "grand modèle seul", ls=":")
+        ax.set_title(method_label(method), color=INK, loc="left", fontweight="bold")
         ax.set_xlabel("époque", color=INK)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.legend(frameon=False, fontsize=9)
+        ax.legend(frameon=False, fontsize=8.5)
         _style(ax)
     for row in axes:
         row[0].set_ylabel("accuracy de validation (%)" + (" — consensus" if key == "val_accuracy" else ""), color=INK)
-    fig.tight_layout()
-    return fig
-
-
-def lr_sweeps(runs) -> Dict[tuple, Dict[float, list]]:
-    """{(méthode, alpha): {lr: [runs]}} pour les méthodes lancées avec au moins deux lr."""
-    out = {}
-    for run in runs:
-        if run["lr"] is None:
-            continue
-        for r in run["results"]["runs"]:
-            out.setdefault((run["method"], float(r["alpha"])), {}).setdefault(run["lr"], []).append(r)
-    return {k: v for k, v in out.items() if len(v) >= 2}
-
-
-def _big_model_reference(runs):
-    """(runs du grand modèle, son lr) : le dossier qui a un grand modèle, en priorité celui sans tag lr."""
-    with_big = [r for r in runs if r["results"].get("big_model")]
-    if not with_big:
-        return None, None
-    with_big.sort(key=lambda r: any(LR_TAG.match(t) for t in (r["config"].get("tag") or "").split("_")))
-    run = with_big[0]
-    lr = run["config"].get("big_lr") or run["lr"]
-    return run["results"]["big_model"]["runs"], lr
-
-
-def plot_vs_lr(runs, sweeps, keys, titles, ylabel, scale=100, big_key=None):
-    """Une courbe par (méthode, alpha) selon le lr (axe log), médiane et bande q05-q95 sur les graines."""
-    import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(1, len(keys), figsize=(6.2 * len(keys), 4.2), squeeze=False, sharey=True)
-    big_runs, big_lr = _big_model_reference(runs) if big_key else (None, None)
-    show_alpha = len({a for _, a in sweeps}) > 1
-    for ax, key, title in zip(axes[0], keys, titles):
-        for i, ((method, alpha), by_lr) in enumerate(sorted(sweeps.items())):
-            color = COLORS[i % len(COLORS)]
-            lrs = sorted(by_lr)
-            s = np.array([stats([r.get(key) * scale for r in by_lr[lr] if r.get(key) is not None]) for lr in lrs])
-            ax.fill_between(lrs, s[:, 1], s[:, 2], color=color, alpha=0.15, lw=0)
-            label = method + (f" α={alpha:g}" if show_alpha else "")
-            ax.plot(lrs, s[:, 0], color=color, marker="o", ms=6, mec=SURFACE, mew=1.2, lw=2, label=label)
-        if big_runs:
-            m, lo, hi = stats([r[big_key] * scale for r in big_runs])
-            ax.axhspan(lo, hi, color=BIG_COLOR, alpha=0.08, lw=0)
-            ax.axhline(m, color=BIG_COLOR, ls=":", lw=2,
-                       label="grand modèle seul" + (f" (lr* = {big_lr:g})" if big_lr else ""))
-            if big_lr:
-                ax.axvline(big_lr, color=BIG_COLOR, lw=0.8, alpha=0.4)
-        ax.set_xscale("log")
-        all_lrs = sorted({lr for v in sweeps.values() for lr in v})
-        ax.set_xticks(all_lrs, [f"{lr:g}" for lr in all_lrs])
-        ax.minorticks_off()
-        ax.set_xlabel("learning rate des agents (échelle log)", color=INK)
-        ax.set_title(title, color=INK, loc="left", fontweight="bold")
-        _style(ax)
-    axes[0][0].set_ylabel(ylabel, color=INK)
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.0, 0.92), frameon=False)
     fig.tight_layout()
     return fig
 
@@ -343,31 +319,31 @@ SUMMARY_METRICS = [("consensus", "accuracy_consensus"), ("mean_ensemble", "accur
                    ("ece_consensus", "ece_consensus")]
 
 
-def write_summary_csv(runs, path: str) -> None:
-    header = ["run_dir", "method", "lr", "alpha", "loss", "strategy", "n_seeds"]
+def write_summary_csv(entries, reference, params: Sequence[str], path: str) -> None:
+    header = ["method", *params, "alpha", "loss", "strategy", "n_seeds", "run_dir"]
     for name, _ in SUMMARY_METRICS:
         header += [f"{name}_median", f"{name}_q05", f"{name}_q95"]
     rows = []
-    for run in runs:
+    for e in entries:
         by_alpha = {}
-        for r in run["results"]["runs"]:
+        for r in e["results"]["runs"]:
             by_alpha.setdefault(float(r["alpha"]), []).append(r)
         for a in sorted(by_alpha):
             rs = by_alpha[a]
-            row = [run["name"], run["label"], "" if run["lr"] is None else f"{run['lr']:g}", f"{a:g}", f"{rs[0].get('loss_type', run['config'].get('loss_type'))} "
-                   f"({rs[0].get('loss_form', run['config'].get('loss_form'))})", rs[0].get("strategy"), len(rs)]
+            row = [e["method"], *[fmt(value_of(e, rs[0], p)) for p in params], fmt(a),
+                   f"{rs[0].get('loss_type')} ({rs[0].get('loss_form')})", rs[0].get("strategy"), len(rs), e["dir"]]
             for _, key in SUMMARY_METRICS:
                 row += [f"{v:.6g}" for v in stats([r.get(key) for r in rs])]
             rows.append(row)
-        big = run["results"].get("big_model")
-        if big:
-            big_lr = run["config"].get("big_lr") or run["lr"]
-            row = [run["name"], "grand modèle seul", "" if big_lr is None else f"{big_lr:g}", "",
-                   run["config"].get("reference_loss", "ce"), "", len(big["runs"])]
-            for name, _ in SUMMARY_METRICS:
-                key = {"consensus": "accuracy", "nll_consensus": "nll", "ece_consensus": "ece"}.get(name)
-                row += [f"{v:.6g}" for v in stats([r[key] for r in big["runs"]])] if key else ["", "", ""]
-            rows.append(row)
+    if reference:
+        runs = reference["results"]["runs"]
+        lr = reference.get("lr")
+        row = ["grand modèle seul", *[fmt(lr) if p == "lr" else "" for p in params], "",
+               reference["config"].get("loss", "ce"), "", len(runs), reference["dir"]]
+        for name, _ in SUMMARY_METRICS:
+            key = {"consensus": "accuracy", "nll_consensus": "nll", "ece_consensus": "ece"}.get(name)
+            row += [f"{v:.6g}" for v in stats([r[key] for r in runs])] if key else ["", "", ""]
+        rows.append(row)
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", newline="") as f:
         w = csv.writer(f)
@@ -377,68 +353,83 @@ def write_summary_csv(runs, path: str) -> None:
 
 
 # =============================================================================
-# POINT D'ENTRÉE
+# POINTS D'ENTRÉE
 # =============================================================================
 
-def plot_group(results_root: str, dataset: str, arch: str, num_agents: int,
-               formats: Sequence[str] = ("png", "pdf"), run_dirs: Optional[List[str]] = None,
-               out_dir: Optional[str] = None) -> Dict[str, List[str]]:
-    """Toutes les figures et le tableau d'un groupe (dataset, arch, K). Renvoie {nom: [fichiers]}."""
+def _setup_matplotlib():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     plt.rcParams.update({"font.size": 10.5, "figure.facecolor": SURFACE, "axes.facecolor": SURFACE,
                          "text.color": INK, "pdf.fonttype": 42})
+    return plt
 
-    dirs = run_dirs or group_dirs(results_root, dataset, arch, num_agents)
-    runs = [load_run(d) for d in dirs]
-    runs = [r for r in runs if r["results"].get("runs") or r["results"].get("big_model")]
-    if not runs:
-        log.info("[figures] aucun résultat pour %s / %s / K = %d", dataset, arch, num_agents)
+
+def plot_entries(entries, reference, params: Sequence[str], out_dir: str, title: str,
+                 formats: Sequence[str] = ("png", "pdf")) -> Dict[str, List[str]]:
+    """Toutes les figures d'un groupe : `params` = paramètres balayés (une figure selon chacun)."""
+    plt = _setup_matplotlib()
+    if not entries:
+        log.info("[figures] aucun résultat pour %s", title)
         return {}
-    out_dir = out_dir or os.path.join(results_root, "comparisons", dataset, f"{arch}_{num_agents}agents")
     os.makedirs(out_dir, exist_ok=True)
-    alphas = sorted({float(r["alpha"]) for run in runs for r in run["results"]["runs"]})
-    title = f"{num_agents} × {arch} — {dataset}"
-
     out = {}
     path = os.path.join(out_dir, "summary.csv")
-    write_summary_csv(runs, path)
+    write_summary_csv(entries, reference, [p for p in params if p != "alpha"], path)
     out["summary"] = [path]
-
-    if len(alphas) >= 2:
-        fig = plot_vs_alpha(runs, alphas, ["accuracy_consensus", "accuracy_agent_median"],
+    for param in params:
+        others = [p for p in params if p != param]
+        fig = plot_vs_param(entries, reference, param, ["accuracy_consensus", "accuracy_agent_median"],
                             [f"Consensus — {title}", "Agent médian (un agent seul)"], "accuracy de test (%)",
-                            big_key="accuracy")
-        out["accuracy_vs_alpha"] = _save(fig, out_dir, "accuracy_vs_alpha", formats)
+                            other_params=others)
+        out[f"accuracy_vs_{param}"] = _save(fig, out_dir, f"accuracy_vs_{param}", formats)
         plt.close(fig)
-
-        fig = plot_vs_alpha(runs, alphas, ["disagreement"], [f"Diversité des agents — {title}"],
-                            "désaccord entre agents (%)")
-        out["diversity_vs_alpha"] = _save(fig, out_dir, "diversity_vs_alpha", formats)
+        fig = plot_vs_param(entries, reference, param, ["disagreement"], [f"Diversité des agents — {title}"],
+                            "désaccord entre agents (%)", other_params=others, show_reference=False)
+        out[f"diversity_vs_{param}"] = _save(fig, out_dir, f"diversity_vs_{param}", formats)
         plt.close(fig)
-
-    sweeps = lr_sweeps(runs)
-    if sweeps:
-        fig = plot_vs_lr(runs, sweeps, ["accuracy_consensus", "accuracy_agent_median"],
-                         [f"Consensus — {title}", "Agent médian (un agent seul)"], "accuracy de test (%)",
-                         big_key="accuracy")
-        out["accuracy_vs_lr"] = _save(fig, out_dir, "accuracy_vs_lr", formats)
-        plt.close(fig)
-
-        fig = plot_vs_lr(runs, sweeps, ["disagreement"], [f"Diversité des agents — {title}"],
-                         "désaccord entre agents (%)")
-        out["diversity_vs_lr"] = _save(fig, out_dir, "diversity_vs_lr", formats)
-        plt.close(fig)
-
-    fig = plot_paired(runs)
+    fig = plot_paired(entries, reference)
     if fig is not None:
         out["paired_difference"] = _save(fig, out_dir, "paired_difference", formats)
         plt.close(fig)
-
-    fig = plot_learning_curves(runs)
+    fig = plot_learning_curves(entries, reference)
     out["learning_curves"] = _save(fig, out_dir, "learning_curves", formats)
     plt.close(fig)
-
-    log.info("[figures] %d dossier(s) -> %s", len(runs), os.path.abspath(out_dir))
+    log.info("[figures] %s -> %s", title, os.path.abspath(out_dir))
+    for name, paths in out.items():
+        log.info("  %-22s %s", name, ", ".join(os.path.basename(x) for x in paths))
     return out
+
+
+def swept_params(campaign) -> List[str]:
+    """Paramètres de la grille qui prennent au moins deux valeurs (hors dataset / arch / K : groupes)."""
+    return [k for k, v in campaign.grid.items() if len(v) >= 2 and k not in ("dataset", "arch", "num_agents")]
+
+
+def plot_campaign(campaign, formats: Sequence[str] = ("png", "pdf")) -> Dict[tuple, Dict[str, List[str]]]:
+    """Figures de chaque groupe (dataset, arch, K) d'une campagne, dans .../<arch>_<K>agents/figures/."""
+    params = swept_params(campaign) or ["alpha"]
+    groups: Dict[tuple, list] = {}
+    for run in campaign.runs():
+        if run.experiment == "collaboration":
+            groups.setdefault(run.group, []).append(run)
+    out = {}
+    for group, runs in groups.items():
+        dataset, arch, k = group
+        entries = [e for e in (load_entry(r.run_dir, r.method, r.point) for r in runs) if e is not None]
+        ref_run = campaign.reference_for(runs[0])
+        reference = load_reference(ref_run.run_dir) if ref_run else None
+        out_dir = os.path.join(os.path.dirname(os.path.dirname(runs[0].run_dir)), "figures")
+        out[group] = plot_entries(entries, reference, params, out_dir, f"{k} × {arch} — {dataset}", formats)
+    return out
+
+
+def plot_run_dirs(run_dirs: Sequence[str], out_dir: str, reference_dir: Optional[str] = None,
+                  params: Sequence[str] = ("alpha",), formats: Sequence[str] = ("png", "pdf")):
+    """Figures de dossiers donnés à la main (paramètres lus dans leur config.json)."""
+    entries = [e for e in (load_entry(d) for d in run_dirs) if e is not None]
+    for e in entries:
+        e["point"] = {p: value_of(e, {}, p) for p in params if p != "alpha"}
+    cfg = entries[0]["config"] if entries else {}
+    title = f"{cfg.get('num_agents', '?')} × {cfg.get('arch', '?')} — {cfg.get('dataset', '?')}"
+    return plot_entries(entries, load_reference(reference_dir), list(params), out_dir, title, formats)

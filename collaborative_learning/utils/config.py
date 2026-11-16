@@ -1,11 +1,12 @@
 """
 Configuration des expériences : un seul endroit pour les valeurs par défaut, la lecture
-du JSON, la ligne de commande et la vérification.
+des fichiers (YAML ou JSON), la ligne de commande et la vérification.
 
-    cfg = load_config(CollaborationConfig, "configs/collaboration.json", overrides={"epochs": 2})
+    cfg = load_config(CollaborationConfig, "configs/collaboration.yaml", overrides={"epochs": 2})
 
-Ordre de priorité : valeurs par défaut de la dataclass < fichier JSON < ligne de commande.
-Une clé inconnue dans le JSON (faute de frappe) arrête le script avec un message clair.
+Ordre de priorité : valeurs par défaut de la dataclass < fichier(s) de config < ligne de commande.
+Un fichier YAML peut en inclure d'autres avec `defaults:` (voir config_files.py).
+Une clé inconnue (faute de frappe) arrête le script avec un message clair.
 Les clés qui commencent par "_" sont des commentaires et sont ignorées.
 
 Ajouter un réglage : ajouter un champ à la dataclass avec opt(...). L'option de ligne de
@@ -27,6 +28,7 @@ from collaborative_learning.core.consensus import available_strategies
 from collaborative_learning.core.losses import FORMS, available_losses
 from collaborative_learning.data import available_datasets
 from collaborative_learning.training.optimizers import DEFAULT_WD_EXCLUDE, available_optimizers
+from collaborative_learning.utils.config_files import read_config_file
 
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))  # dans le dépôt Git (pour le commit)
 PRECISIONS = ("float32", "mixed_bfloat16")
@@ -108,6 +110,7 @@ class BaseConfig:
                                    "(ex. adam -> results/<expérience>/<dataset>/<arch>_<K>agents_adam).", kind="str_or_none")
 
     EXPERIMENT = "experiment"          # nom de l'expérience, début du nom du dossier de run
+    IGNORED_KEYS = ()                  # anciennes clés acceptées et ignorées (configs d'avant une refonte)
     # Réglages qui peuvent changer entre deux lancements dans le même dossier de run
     # (ajouter des runs, des alphas...) sans mélanger deux expériences différentes.
     EXTENSIBLE = ("n_runs", "out_dir", "jit", "steps_per_execution", "checkpoint_every")
@@ -153,19 +156,16 @@ class BaseConfig:
         return self.arch
 
     def variant_name(self) -> str:
-        """Dernier dossier du run : <arch>_<K>agents[_<tag>] (<arch>[_<tag>] pour un seul modèle)."""
-        name = self.model_arch
-        if isinstance(self, TrainConfig):
-            name += f"_{self.num_agents}agents"
-        return f"{name}_{self.tag}" if self.tag else name
+        """Fin du chemin du run, après <expérience>/<dataset>/ (redéfini par chaque config)."""
+        return f"{self.model_arch}_{self.tag}" if self.tag else self.model_arch
 
     def run_name(self) -> str:
-        """<expérience>/<dataset>/<arch>_<K>agents[_<tag>]"""
+        """<expérience>/<dataset>/<variante>"""
         return f"{self.EXPERIMENT}/{self.dataset}/{self.variant_name()}"
 
     def run_dir(self) -> str:
-        """results/<expérience>/<dataset>/<arch>_<K>agents[_<tag>]"""
-        return os.path.join(self.out_dir, self.EXPERIMENT, self.dataset, self.variant_name())
+        """results/<expérience>/<dataset>/<variante>"""
+        return os.path.join(self.out_dir, self.EXPERIMENT, self.dataset, *self.variant_name().split("/"))
 
     def signature(self) -> Dict[str, Any]:
         """Réglages qui définissent l'expérience : ils doivent être identiques dans un même dossier de run."""
@@ -200,40 +200,46 @@ class TrainConfig(BaseConfig):
     per_agent_views: bool = opt(False, "Une augmentation différente par agent.")
 
 
+def fmt_value(value) -> str:
+    """Valeur dans un nom de dossier : 0.001 -> 0.001, 1e-05 -> 1e-05, 10.0 -> 10, [a, b] -> a-b."""
+    if isinstance(value, (list, tuple)):
+        return "-".join(fmt_value(v) for v in value)
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
 @dataclass
 class CollaborationConfig(TrainConfig):
     """
     K agents entraînés ensemble, pour une ou plusieurs valeurs de alpha (un run simple = une seule
-    valeur), et en option un grand modèle seul, de la même architecture élargie, au même nombre de
-    paramètres que les K agents réunis.
+    valeur). Le grand modèle seul est une expérience à part (ReferenceConfig).
     """
     EXPERIMENT = "collaboration"
-    # alphas et grand modèle peuvent être ajoutés à un dossier existant (nouvelles tâches)
-    EXTENSIBLE = TrainConfig.EXTENSIBLE + ("alphas", "big_model")
-    arch: str = opt("resnet20", "Architecture des agents (le grand modèle a la même, élargie).")
+    # des alphas peuvent être ajoutés à un dossier existant (nouvelles tâches)
+    EXTENSIBLE = TrainConfig.EXTENSIBLE + ("alphas",)
+    # clés d'avant la refonte du 2026-11-15 (grand modèle dans la même expérience) : ignorées
+    IGNORED_KEYS = ("big_model", "big_optimizer", "big_lr", "big_optimizer_kwargs", "reference_loss")
+    method: Optional[str] = opt(None, "Nom de la méthode (dossier de résultats) ; défaut : <loss_type>_<loss_form>.",
+                                kind="str_or_none")
+    arch: str = opt("resnet20", "Architecture des agents.")
     alphas: List[float] = opt([1.0], "Valeur(s) de alpha : une seule = un run simple, plusieurs = un balayage "
                                      "(alpha = 0 : agents indépendants en cross-entropy, vote majoritaire).",
                          kind="list_float")
     lr: Union[float, List[float]] = opt(0.01, "Un lr pour tous les agents, ou un par agent "
                                               "(0.1 fait diverger la loss multiplicative).", kind="per_agent")
-    big_model: bool = opt(False, "Entraîne aussi un grand modèle seul, au même nombre de paramètres que les K agents.")
-    big_optimizer: Optional[str] = opt(None, "Optimiseur du grand modèle (défaut : celui des agents).",
-                                       choices=available_optimizers(), kind="str_or_none")
-    big_lr: Optional[float] = opt(None, "lr du grand modèle (défaut : celui des agents).", kind="float_or_none")
-    big_optimizer_kwargs: Optional[Dict[str, Any]] = opt(None, "Arguments en plus pour le grand modèle (JSON).",
-                                                         kind="json")
-    reference_loss: str = opt("ce", "Loss du grand modèle : cross-entropy, ou même forme que les agents "
-                                    "avec I_k = 0 (L_k² en multiplicatif).", choices=REFERENCE_LOSSES)
 
     def _extra_checks(self) -> List[str]:
-        errors = []
-        if not self.alphas:
-            errors.append("alphas est vide : donne au moins une valeur (ex. --alphas 1)")
-        if self.big_model:
-            for key in ("optimizer", "lr", "optimizer_kwargs"):
-                if getattr(self, f"big_{key}") is None and isinstance(getattr(self, key), list):
-                    errors.append(f"'{key}' est une liste (un par agent) : précise 'big_{key}' pour le grand modèle")
-        return errors
+        return [] if self.alphas else ["alphas est vide : donne au moins une valeur (ex. --alphas 1)"]
+
+    @property
+    def method_name(self) -> str:
+        return self.method or f"{self.loss_type}_{self.loss_form}"
+
+    def variant_name(self) -> str:
+        """<arch>_<K>agents/<méthode>[_<tag>]"""
+        name = f"{self.method_name}_{self.tag}" if self.tag else self.method_name
+        return f"{self.arch}_{self.num_agents}agents/{name}"
 
     def setup_for(self, alpha: float) -> Dict[str, str]:
         """
@@ -249,10 +255,46 @@ class CollaborationConfig(TrainConfig):
         """Vote majoritaire sans interaction (alpha = 0), sinon la stratégie de la config."""
         return self.setup_for(alpha)["strategy"]
 
-    def big_model_optimizer(self) -> Dict[str, Any]:
-        """Optimiseur du grand modèle : big_* si donné, sinon celui des agents."""
-        return {key: getattr(self, key) if getattr(self, f"big_{key}") is None else getattr(self, f"big_{key}")
-                for key in ("optimizer", "lr", "optimizer_kwargs")}
+
+@dataclass
+class ReferenceConfig(BaseConfig):
+    """
+    Grand modèle seul : la même architecture que les agents, élargie pour avoir autant de paramètres
+    entraînables que `num_agents` agents réunis. Il ne dépend ni de alpha ni de la loss des agents :
+    entraîné une fois, il sert de référence à toutes les campagnes qui ont le même dataset, la même
+    architecture, le même K et les mêmes réglages d'entraînement.
+    """
+    EXPERIMENT = "reference"
+    arch: str = opt("resnet20", "Architecture des agents (le grand modèle est la même, élargie).")
+    num_agents: int = opt(5, "Nombre d'agents K : le grand modèle a autant de paramètres que K agents.")
+    width: Optional[float] = opt(None, "Largeur imposée (défaut : calculée à partir de num_agents).",
+                                 kind="float_or_none")
+    lr: Union[float, List[float]] = opt(0.01, "lr du grand modèle.", kind="per_agent")
+    loss: str = opt("ce", "Loss : cross-entropy, ou même forme que les agents avec I_k = 0 "
+                          "(L_k² en multiplicatif).", choices=REFERENCE_LOSSES)
+    loss_form: str = opt("multiplicative", "Forme utilisée si loss = same_as_agents.", choices=FORMS)
+
+    def _extra_checks(self) -> List[str]:
+        errors = []
+        for key in ("optimizer", "lr", "optimizer_kwargs"):
+            if isinstance(getattr(self, key), list):
+                errors.append(f"'{key}' : une seule valeur pour le grand modèle")
+        return errors
+
+    def validate(self):
+        saved, self.num_agents = self.num_agents, 1       # pas de liste par agent ici
+        try:
+            super().validate()
+        finally:
+            self.num_agents = saved
+        return self
+
+    def variant_name(self) -> str:
+        """<arch>_x<K>params_<optimiseur>_lr<lr>[_<loss>][_<tag>]"""
+        name = f"{self.arch}_x{self.num_agents}params_{self.optimizer}_lr{fmt_value(self.lr)}"
+        if self.loss != "ce":
+            name += f"_{self.loss}"
+        return f"{name}_{self.tag}" if self.tag else name
 
 
 DEFAULT_SEARCH_SPACE = {
@@ -269,7 +311,7 @@ SEARCH_PRUNERS = ("median", "hyperband", "none")
 class HyperparamSearchConfig(BaseConfig):
     """
     Recherche des meilleurs hyperparamètres (Optuna) d'UN modèle sur un jeu de données.
-    Les paramètres trouvés servent ensuite à construire K agents (tuned_collaboration.json).
+    Les paramètres trouvés servent ensuite à construire K agents (tuned_params.yaml, repris par les campagnes avec use_tuned_params: true).
     """
     EXPERIMENT = "hyperparameter_search"
     arch: str = opt("resnet20", "Architecture du modèle.")
@@ -329,7 +371,8 @@ def config_from_dict(cls, values: Dict[str, Any], strict: bool = True):
     """Crée une config ; strict=False ignore les clés inconnues (relecture d'un config.json enregistré)."""
     known = {f.name for f in dataclasses.fields(cls)}
     # "_..." = commentaires ; "experiment" = écrit dans config.json (une config enregistrée peut resservir)
-    values = {k: v for k, v in values.items() if not k.startswith("_") and k != "experiment"}
+    values = {k: v for k, v in values.items()
+              if not k.startswith("_") and k != "experiment" and k not in cls.IGNORED_KEYS}
     unknown = sorted(set(values) - known)
     if unknown and strict:
         raise SystemExit(_unknown_keys_message(cls, unknown))
@@ -337,13 +380,10 @@ def config_from_dict(cls, values: Dict[str, Any], strict: bool = True):
 
 
 def load_config(cls, path: Optional[str] = None, overrides: Optional[Dict[str, Any]] = None, strict: bool = True):
-    """Valeurs par défaut, puis fichier JSON, puis surcharges (valeurs None ignorées)."""
+    """Valeurs par défaut, puis fichier YAML / JSON (avec ses defaults), puis surcharges (None ignorés)."""
     values: Dict[str, Any] = {}
     if path is not None:
-        if not os.path.exists(path):
-            raise SystemExit(f"Fichier de config introuvable : {os.path.abspath(path)}")
-        with open(path) as f:
-            values.update(json.load(f))
+        values.update(read_config_file(path))
     values.update({k: v for k, v in (overrides or {}).items() if v is not None})
     return config_from_dict(cls, values, strict=strict).validate()
 
@@ -356,7 +396,7 @@ _SCALAR_TYPES = {int: int, float: float, str: str}
 
 
 def add_config_arguments(parser: argparse.ArgumentParser, cls) -> None:
-    """Ajoute une option --nom-du-champ par champ de la config (défaut None = valeur du JSON)."""
+    """Ajoute une option --nom-du-champ par champ de la config (défaut None = valeur du fichier)."""
     group = parser.add_argument_group("réglages (surchargent le fichier de config)")
     for f in dataclasses.fields(cls):
         kind, help_ = f.metadata.get("kind", "auto"), f.metadata.get("help", "")

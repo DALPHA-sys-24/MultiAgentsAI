@@ -11,7 +11,7 @@ optuna = pytest.importorskip("optuna")
 
 
 def test_shipped_config_loads():
-    cfg = load_config(HyperparamSearchConfig, "configs/hyperparameter_search.json")
+    cfg = load_config(HyperparamSearchConfig, "configs/hyperparameter_search.yaml")
     assert cfg.direction == "maximize"
 
 
@@ -62,21 +62,20 @@ def test_tiny_study_runs_and_exports(tmp_path, tiny_data):
     assert len(again.trials) == 2
 
 
-def test_best_params_build_multi_agent_config(tmp_path):
-    from collaborative_learning.utils.config import CollaborationConfig, config_from_dict
-    from experiments.hyperparameter_search import multi_agent_config
+def test_best_params_become_tuned_params(tmp_path):
+    from collaborative_learning.utils.config import CollaborationConfig
+    from experiments.hyperparameter_search import tuned_params
 
     cfg = load_config(HyperparamSearchConfig, overrides={"dataset": "fashion_mnist", "arch": "resnet32"})
     best = {"lr": 0.004, "optimizer": "adamw", "weight_decay": 1e-4}
-    tuned = config_from_dict(CollaborationConfig, multi_agent_config(cfg, best))
-    assert (tuned.arch, tuned.dataset, tuned.lr, tuned.optimizer, tuned.weight_decay) == \
-        ("resnet32", "fashion_mnist", 0.004, "adamw", 1e-4)
-    tuned3 = load_config(CollaborationConfig, overrides={**multi_agent_config(cfg, best), "num_agents": 3})
-    assert tuned3.run_name() == "collaboration/fashion_mnist/resnet32_3agents_tuned"
+    values = tuned_params(cfg, best)
+    assert "dataset" not in values and "arch" not in values and values["lr"] == 0.004
+    tuned = load_config(CollaborationConfig, overrides={**values, "num_agents": 3, "dataset": "fashion_mnist"})
+    assert (tuned.lr, tuned.optimizer, tuned.weight_decay) == (0.004, "adamw", 1e-4)
 
 
 def test_search_is_on_one_model():
-    cfg = load_config(HyperparamSearchConfig, "configs/hyperparameter_search.json")
+    cfg = load_config(HyperparamSearchConfig, "configs/hyperparameter_search.yaml")
     assert not hasattr(cfg, "alpha") and cfg.num_agents == 1
     assert cfg.run_name() == "hyperparameter_search/fashion_mnist/resnet20"
     with pytest.raises(SystemExit, match="alpha"):

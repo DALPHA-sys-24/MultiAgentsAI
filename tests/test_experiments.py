@@ -1,4 +1,4 @@
-"""Découpage en tâches, exécution d'une seule tâche (--task-index), fusion, protection du dossier."""
+"""Découpage en tâches, exécution d'une seule tâche (--task-index), fusion, protection du dossier, campagnes."""
 import json
 import os
 
@@ -6,78 +6,66 @@ import pytest
 
 import experiments.common as common
 from experiments.collaboration import Collaboration
+from experiments.reference import Reference
 
 ARGS = ["--epochs", "1", "--batch-size", "16", "--num-agents", "2", "--warmup-epochs", "0",
-        "--augment", "false", "--big-model", "false", "--cpu", "--verbose", "0"]   # options ajoutées après : prioritaires
+        "--augment", "false", "--cpu", "--verbose", "0"]   # options ajoutées après : prioritaires
+FAST = {"epochs": 1, "batch_size": 16, "num_agents": 2, "warmup_epochs": 0, "augment": False, "n_runs": 1}
 
 
 @pytest.fixture
 def fake_data(monkeypatch, tiny_data):
     monkeypatch.setattr(common, "load_dataset", lambda *a, **k: dict(tiny_data))
     monkeypatch.setattr(common, "download_dataset", lambda *a, **k: None)
+    import collaborative_learning.data as data
+    monkeypatch.setattr(data, "download_dataset", lambda *a, **k: None)
+
+
+def read(path):
+    with open(path) as f:
+        return json.load(f)
 
 
 def test_list_tasks(capsys, tmp_path, fake_data):
-    Collaboration().main(ARGS + ["--n-runs", "3", "--alphas", "1", "--run-dir", str(tmp_path), "--list-tasks"])
-    assert capsys.readouterr().out.strip() == f"TASKS 3 {tmp_path}"
-    Collaboration().main(ARGS + ["--n-runs", "3", "--alphas", "0", "1", "--big-model", "true",
-                                 "--run-dir", str(tmp_path), "--list-tasks"])
-    assert capsys.readouterr().out.strip() == f"TASKS 9 {tmp_path}"
-    ids = [t.id for t in Collaboration().tasks(Collaboration.CONFIG_CLS(n_runs=2, alphas=[0, 1], big_model=True))]
-    assert ids == ["alpha0_seed0", "alpha1_seed0", "big_model_seed0", "alpha0_seed1", "alpha1_seed1", "big_model_seed1"]
+    Collaboration().main(ARGS + ["--n-runs", "3", "--alphas", "0", "1", "--run-dir", str(tmp_path), "--list-tasks"])
+    assert capsys.readouterr().out.strip() == f"TASKS 6 {tmp_path}"
+    ids = [t.id for t in Collaboration().tasks(Collaboration.CONFIG_CLS(n_runs=2, alphas=[0, 1]))]
+    assert ids == ["alpha0_seed0", "alpha1_seed0", "alpha0_seed1", "alpha1_seed1"]
 
 
-def test_tasks_then_merge_with_big_model(tmp_path, fake_data):
-    run_dir = str(tmp_path / "run")
-    args = ARGS + ["--n-runs", "1", "--alphas", "1", "--big-model", "true", "--run-dir", run_dir]
-    Collaboration().main(args + ["--task-index", "0"])          # agents de la graine 0, alpha = 1
-    assert os.path.exists(os.path.join(run_dir, "tasks", "alpha1_seed0", "result.json"))
-    with open(os.path.join(run_dir, "results.json")) as f:
-        assert "big_model" not in json.load(f)                   # grand modèle pas encore fini
-    Collaboration().main(args + ["--task-index", "1"])          # grand modèle de la graine 0
-    Collaboration().main(args + ["--merge-only"])
-    with open(os.path.join(run_dir, "results.json")) as f:
-        res = json.load(f)
-    assert [r["seed"] for r in res["runs"]] == [0] and res["big_model"]["runs"][0]["seed"] == 0
-    assert "Grand modèle seul" in res["vs_big_model"]["1"] and res["model_sizes"]["big_width"] > 1
-    assert sorted(os.listdir(os.path.join(run_dir, "test_probabilities"))) == ["alpha1_seed0.npy", "big_model_seed0.npy"]
-
-    # Figures et tableau à partir du dossier fusionné (sans Jupyter)
-    pytest.importorskip("matplotlib")
-    from experiments.plot_results import main as plot_main
-    out_dir = str(tmp_path / "figures")
-    plot_main(["--run-dirs", run_dir, "--out-dir", out_dir, "--formats", "png", "pdf"])
-    files = set(os.listdir(out_dir))
-    assert {"summary.csv", "paired_difference.png", "paired_difference.pdf", "learning_curves.pdf"} <= files
-    assert "accuracy_vs_alpha.png" not in files                 # un seul alpha : pas de figure selon alpha
-
-
-def test_alpha_sweep_without_big_model(tmp_path, fake_data):
+def test_tasks_then_merge(tmp_path, fake_data):
     run_dir = str(tmp_path / "sweep")
-    Collaboration().main(ARGS + ["--n-runs", "1", "--alphas", "0", "1", "--run-dir", run_dir])
-    with open(os.path.join(run_dir, "results.json")) as f:
-        res = json.load(f)
-    assert sorted(os.listdir(os.path.join(run_dir, "tasks"))) == ["alpha0_seed0", "alpha1_seed0"]
-    assert len(res["runs"]) == 2 and set(res["summary"]) == {"0", "1"} and "big_model" not in res
+    args = ARGS + ["--n-runs", "1", "--alphas", "0", "1", "--run-dir", run_dir]
+    Collaboration().main(args + ["--task-index", "1"])          # agents de la graine 0, alpha = 1
+    assert os.listdir(os.path.join(run_dir, "tasks")) == ["alpha1_seed0"]
+    assert set(read(os.path.join(run_dir, "results.json"))["summary"]) == {"1"}   # fusion partielle
+    Collaboration().main(args)                                   # alpha = 0 manquant, puis fusion
+    res = read(os.path.join(run_dir, "results.json"))
+    assert len(res["runs"]) == 2 and set(res["summary"]) == {"0", "1"} and res["agent_params"] > 0
     assert res["summary"]["0"]["strategy"] == "majority"
-    alpha0 = next(r for r in res["runs"] if r["alpha"] == 0)       # agents indépendants en CE classique
+    alpha0 = next(r for r in res["runs"] if r["alpha"] == 0)    # agents indépendants en CE classique
     alpha1 = next(r for r in res["runs"] if r["alpha"] == 1)
     assert (alpha0["loss_type"], alpha0["loss_form"], alpha0["strategy"]) == ("independent", "additive", "majority")
     assert (alpha1["loss_type"], alpha1["loss_form"]) == ("global_interaction", "multiplicative")
     assert sorted(os.listdir(os.path.join(run_dir, "test_probabilities"))) == ["alpha0_seed0.npy", "alpha1_seed0.npy"]
 
 
-def test_big_model_and_alphas_can_be_added_later(tmp_path, fake_data):
+def test_reference_experiment(tmp_path, fake_data):
+    run_dir = str(tmp_path / "ref")
+    Reference().main(ARGS + ["--n-runs", "2", "--run-dir", run_dir, "--task-index", "0"])
+    Reference().main(ARGS + ["--n-runs", "2", "--run-dir", run_dir])
+    res = read(os.path.join(run_dir, "results.json"))
+    assert [r["seed"] for r in res["runs"]] == [0, 1] and set(res["summary"]) == {"accuracy", "nll", "ece"}
+    assert res["model_sizes"]["big_width"] > 1                  # 2x plus de paramètres qu'un agent
+    assert sorted(os.listdir(os.path.join(run_dir, "test_probabilities"))) == ["seed0.npy", "seed1.npy"]
+
+
+def test_alphas_and_runs_can_be_added_later(tmp_path, fake_data):
     run_dir = str(tmp_path / "run")
     Collaboration().main(ARGS + ["--n-runs", "1", "--alphas", "1", "--run-dir", run_dir])
-    Collaboration().main(ARGS + ["--n-runs", "1", "--alphas", "1", "--big-model", "true", "--run-dir", run_dir])
-    Collaboration().main(ARGS + ["--n-runs", "1", "--alphas", "1", "2", "--run-dir", run_dir])   # sans grand modèle
-    with open(os.path.join(run_dir, "config.json")) as f:
-        saved = json.load(f)
-    assert saved["big_model"] is True and "model_sizes" in saved   # gardés par un lancement sans grand modèle
-    with open(os.path.join(run_dir, "results.json")) as f:
-        res = json.load(f)
-    assert set(res["vs_big_model"]) == {"1", "2"} and saved["alphas"] == [1.0, 2.0]
+    Collaboration().main(ARGS + ["--n-runs", "1", "--alphas", "1", "2", "--run-dir", run_dir])
+    saved = read(os.path.join(run_dir, "config.json"))
+    assert saved["alphas"] == [1.0, 2.0] and set(read(os.path.join(run_dir, "results.json"))["summary"]) == {"1", "2"}
 
 
 def test_other_settings_refuse_same_folder(tmp_path, fake_data):
@@ -88,6 +76,75 @@ def test_other_settings_refuse_same_folder(tmp_path, fake_data):
         Collaboration().main(ARGS + ["--lr", "0.5", "--run-dir", run_dir, "--list-tasks"])
 
 
+def test_merge_without_anything_does_nothing(tmp_path):
+    Collaboration().main(["--run-dir", str(tmp_path / "vide"), "--merge-only", "--verbose", "0"])
+    assert not os.path.exists(tmp_path / "vide" / "results.json")
+
+
 def test_underscore_flags_accepted():
-    args = Collaboration().parse_args(["--n_runs", "3", "--batch_size=64", "--task_index", "2", "--big_model", "true"])
-    assert (args.n_runs, args.batch_size, args.task_index, args.big_model) == (3, 64, 2, True)
+    args = Collaboration().parse_args(["--n_runs", "3", "--batch_size=64", "--task_index", "2", "--per_agent_views", "true"])
+    assert (args.n_runs, args.batch_size, args.task_index, args.per_agent_views) == (3, 64, 2, True)
+
+
+# --- campagnes ---------------------------------------------------------------------------------
+
+def write_campaign(tmp_path, grid, **settings):
+    import yaml
+    spec = {"experiment": "collaboration", "datasets": ["fashion_mnist"], "methods": ["global_interaction", "dml"],
+            "settings": {"arch": "resnet20", **FAST, "out_dir": str(tmp_path / "results"), **settings},
+            "grid": grid, "reference": True}
+    path = tmp_path / "essai.yaml"
+    path.write_text(yaml.safe_dump(spec))
+    return str(path)
+
+
+def test_campaign_tasks_and_folders(tmp_path):
+    from experiments.campaign import Campaign
+    camp = Campaign(write_campaign(tmp_path, {"alpha": [0, 1], "lr": [0.1, 0.01]}, n_runs=2))
+    runs = camp.runs()
+    names = [os.path.relpath(r.run_dir, tmp_path / "results").replace("\\", "/") for r in runs]
+    group = "essai/fashion_mnist/resnet20_2agents"
+    assert names == [f"{group}/independent/alpha0_lr0.1", f"{group}/independent/alpha0_lr0.01",   # alpha = 0 : une fois
+                     f"{group}/global_interaction/alpha1_lr0.1", f"{group}/global_interaction/alpha1_lr0.01",
+                     f"{group}/dml/alpha1_lr0.1", f"{group}/dml/alpha1_lr0.01",
+                     "reference/fashion_mnist/resnet20_x2params_sgd_lr0.01"]                  # lr de base
+    assert len(camp.tasks()) == 7 * 2
+    dml = runs[4].cfg
+    assert (dml.loss_type, dml.loss_form, dml.lr, dml.alphas) == ("dml", "additive", 0.1, [1.0])
+    assert camp.reference_for(runs[0]) is runs[-1]
+    assert Campaign(camp.path, {"n_runs": 1}).tasks()[-1][0].experiment == "reference"
+    (tmp_path / "bad.yaml").write_text("datasets: [cifar10]\ngrille: {alpha: [1]}\n")
+    with pytest.raises(SystemExit, match="grid"):                # clé mal écrite : suggestion
+        Campaign(str(tmp_path / "bad.yaml"))
+
+
+def test_campaign_uses_tuned_params(tmp_path):
+    from experiments.campaign import Campaign
+    folder = tmp_path / "results" / "hyperparameter_search" / "fashion_mnist" / "resnet20"
+    folder.mkdir(parents=True)
+    (folder / "tuned_params.yaml").write_text("lr: 0.004\noptimizer: adamw\nweight_decay: 0.0001\n")
+    path = write_campaign(tmp_path, {"alpha": [1]})
+    text = open(path).read() + "use_tuned_params: true\n"
+    open(path, "w").write(text)
+    runs = Campaign(path).runs()
+    assert all((r.cfg.lr, r.cfg.optimizer) == (0.004, "adamw") for r in runs)
+    assert runs[-1].run_dir.endswith(os.path.join("reference", "fashion_mnist", "resnet20_x2params_adamw_lr0.004_tuned"))
+
+
+def test_campaign_runs_task_by_task_then_merges(tmp_path, fake_data):
+    from experiments.campaign import Campaign, main as campaign_main
+    path = write_campaign(tmp_path, {"alpha": [0, 1]})
+    camp = Campaign(path)
+    assert len(camp.tasks()) == 4                                # indépendants, GI, DML, grand modèle
+    for i in range(4):
+        campaign_main([path, "--task", str(i), "--cpu", "--verbose", "0"])
+    campaign_main([path, "--task", "99", "--cpu"])               # hors campagne : rien
+    campaign_main([path, "--merge"])
+    for run in camp.runs():
+        assert os.path.exists(os.path.join(run.run_dir, "results.json")), run.run_dir
+    assert read(os.path.join(camp.runs()[1].run_dir, "results.json"))["method"] == "global_interaction"
+    pytest.importorskip("matplotlib")
+    figures = tmp_path / "results" / "essai" / "fashion_mnist" / "resnet20_2agents" / "figures"
+    files = set(os.listdir(figures))
+    assert {"summary.csv", "accuracy_vs_alpha.png", "accuracy_vs_alpha.pdf", "learning_curves.png"} <= files
+
