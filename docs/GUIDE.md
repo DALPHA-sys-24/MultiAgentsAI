@@ -57,8 +57,8 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec des losses multi
 │   ├── modules.sh              modules du cluster
 │   └── helpers.sh              fonctions communes
 ├── notebooks/
-│   ├── effect_of_alpha.ipynb       effet de alpha dans un run (plusieurs alphas)
-│   ├── agents_vs_big_model.ipynb   K agents vs grand modèle, pour un alpha
+│   ├── effect_of_alpha.ipynb       effet de alpha pour une méthode d'une campagne
+│   ├── agents_vs_big_model.ipynb   K agents vs grand modèle, pour un point de la grille
 │   ├── compare_methods.ipynb       plusieurs méthodes côte à côte (la loss proposée, DML, indépendants, grand modèle)
 │   └── example_figures/
 ├── tests/                      tests pytest
@@ -159,21 +159,21 @@ Les points alpha = 0 (agents indépendants) sont repris dans la courbe de chaque
 
 ## Notebooks
 
-Les notebooks lisent encore **l'ancienne organisation** des résultats (un dossier par variante avec le grand modèle dedans) ; pour les campagnes, utiliser `plot_results` et `summary.csv`.
+Les notebooks lisent une campagne fusionnée : régler en tête `CAMPAIGN` (ex. `alpha_sweep`, `lr_sweep`), `RESULTS_ROOT` (`../results`), et au besoin `DATASET` et `K` (défaut : le premier groupe de la campagne). Ils retrouvent les dossiers des méthodes et le grand modèle de `results/reference/` comme `plot_results` (`campaign_groups` dans `collaborative_learning/evaluation/plots.py`). Figures dans `results/<campagne>/<dataset>/<arch>_<K>agents/figures/notebooks/`.
 
-| Notebook | Lit | Montre |
+| Notebook | Réglages | Montre |
 |---|---|---|
-| `effect_of_alpha.ipynb` | un dossier avec au moins 2 alphas | accuracy, gain, diversité, courbes et calibration selon alpha ; grand modèle en référence s'il existe |
-| `agents_vs_big_model.ipynb` | un dossier avec `--big-model true`, et un alpha (`ALPHA`) | K agents vs grand modèle : tableau, accuracy par agent, courbes, calibration, diversité, accuracy par classe |
-| `compare_methods.ipynb` | tous les dossiers `results/collaboration/<DATASET>/<ARCH>_<K>agents*` | la méthode proposée (chaque α), agents indépendants (α = 0), DML, grand modèle côte à côte |
+| `effect_of_alpha.ipynb` | `METHOD`, `FIXED` (ex. `{"lr": 0.01}`) ; demande au moins 2 alphas | accuracy, gain, diversité, courbes et calibration selon alpha ; grand modèle en référence |
+| `agents_vs_big_model.ipynb` | `METHOD`, `POINT` (ex. `{"alpha": 1, "lr": 0.1}`) | K agents vs grand modèle pour un point : tableau, accuracy par agent, courbes, calibration, diversité, accuracy par classe, puis tous les points face au grand modèle |
+| `compare_methods.ipynb` | `REFERENCE` | toutes les méthodes et tous les points côte à côte, différence appariée, courbes de validation |
 
 `compare_methods.ipynb` :
 - **Tableau** : consensus, moyenne simple, agent médian, meilleur agent, en médiane [q05 ; q95] sur les graines (`comparison.csv`).
-- **Accuracy par méthode** : consensus (point plein) et agent médian (point creux), couleur par famille.
+- **Accuracy par méthode** : consensus (point plein) et agent médian (point creux), même couleur par méthode que les figures de `plot_results`.
 - **Différence appariée** : pour chaque graine, écart d'accuracy avec la référence (grand modèle, sinon agents indépendants) à graine égale, et nombre de graines gagnées.
 - **Courbes d'apprentissage** : accuracy de validation par époque, médiane sur les graines.
 
-Sorties dans `results/comparisons/<dataset>/<arch>_<K>agents/`. Pour que la comparaison soit juste, toutes les variantes doivent avoir le même dataset, la même architecture, le même K, les mêmes époques et les mêmes graines (`N_RUNS`).
+Pour la campagne de test : `RESULTS_ROOT = "../results_quick_test"`, `CAMPAIGN = "quick_test"`. Les notebooks importent le code (`CODE_DIR = ".."`) : TensorFlow et PyYAML doivent être installés.
 
 ## Fonctionnalités
 

@@ -154,7 +154,7 @@ collaborative_learning/     package Python
 experiments/                scripts lancés avec python -m experiments.<nom>
 configs/                    configs YAML et campagnes
 slurm/                      campaign.sh, merge_campaign.sh
-notebooks/                  analyses détaillées (anciens résultats)
+notebooks/                  analyses détaillées d'une campagne (Jupyter)
 tests/                      tests pytest
 ```
 

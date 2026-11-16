@@ -406,21 +406,34 @@ def swept_params(campaign) -> List[str]:
     return [k for k, v in campaign.grid.items() if len(v) >= 2 and k not in ("dataset", "arch", "num_agents")]
 
 
-def plot_campaign(campaign, formats: Sequence[str] = ("png", "pdf")) -> Dict[tuple, Dict[str, List[str]]]:
-    """Figures de chaque groupe (dataset, arch, K) d'une campagne, dans .../<arch>_<K>agents/figures/."""
-    params = swept_params(campaign) or ["alpha"]
+def campaign_groups(campaign) -> Dict[tuple, dict]:
+    """
+    Résultats fusionnés d'une campagne, par groupe (dataset, arch, K) :
+    {"entries": [un par méthode et point], "reference": grand modèle ou None, "dir": dossier du groupe}.
+    Sert aux figures et aux notebooks.
+    """
     groups: Dict[tuple, list] = {}
     for run in campaign.runs():
         if run.experiment == "collaboration":
             groups.setdefault(run.group, []).append(run)
     out = {}
     for group, runs in groups.items():
-        dataset, arch, k = group
-        entries = [e for e in (load_entry(r.run_dir, r.method, r.point) for r in runs) if e is not None]
         ref_run = campaign.reference_for(runs[0])
-        reference = load_reference(ref_run.run_dir) if ref_run else None
-        out_dir = os.path.join(os.path.dirname(os.path.dirname(runs[0].run_dir)), "figures")
-        out[group] = plot_entries(entries, reference, params, out_dir, f"{k} × {arch} — {dataset}", formats)
+        out[group] = {
+            "entries": [e for e in (load_entry(r.run_dir, r.method, r.point) for r in runs) if e is not None],
+            "reference": load_reference(ref_run.run_dir) if ref_run else None,
+            "dir": os.path.dirname(os.path.dirname(runs[0].run_dir)),
+        }
+    return out
+
+
+def plot_campaign(campaign, formats: Sequence[str] = ("png", "pdf")) -> Dict[tuple, Dict[str, List[str]]]:
+    """Figures de chaque groupe (dataset, arch, K) d'une campagne, dans .../<arch>_<K>agents/figures/."""
+    params = swept_params(campaign) or ["alpha"]
+    out = {}
+    for (dataset, arch, k), g in campaign_groups(campaign).items():
+        out[(dataset, arch, k)] = plot_entries(g["entries"], g["reference"], params, os.path.join(g["dir"], "figures"),
+                                               f"{k} × {arch} — {dataset}", formats)
     return out
 
 
