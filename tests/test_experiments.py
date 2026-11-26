@@ -148,3 +148,43 @@ def test_campaign_runs_task_by_task_then_merges(tmp_path, fake_data):
     files = set(os.listdir(figures))
     assert {"summary.csv", "accuracy_vs_alpha.png", "accuracy_vs_alpha.pdf", "learning_curves.png"} <= files
 
+
+
+def test_heterogeneous_agents_config():
+    from collaborative_learning.utils.config import CollaborationConfig, config_from_dict
+    cfg = config_from_dict(CollaborationConfig, {"arch": "resnet32+mobilenetv2", "num_agents": 5}).validate()
+    assert (cfg.num_agents, cfg.agent_archs) == (2, ["resnet32", "mobilenetv2"])     # K = nombre d'architectures
+    assert cfg.variant_name().startswith("resnet32+mobilenetv2_2agents/")
+    cfg = config_from_dict(CollaborationConfig, {"arch": ["resnet20", "resnet32"]}).validate()   # liste YAML
+    assert cfg.arch == "resnet20+resnet32"
+    assert config_from_dict(CollaborationConfig, {"arch": "resnet20", "num_agents": 3}).validate().agent_archs == ["resnet20"] * 3
+    with pytest.raises(SystemExit, match="pas_un_modele"):
+        config_from_dict(CollaborationConfig, {"arch": "resnet20+pas_un_modele"}).validate()
+
+
+def test_campaign_heterogeneous_and_k_sweep_folders(tmp_path):
+    from experiments.campaign import Campaign
+    camp = Campaign(write_campaign(tmp_path, {"arch": ["resnet20+resnet32", "resnet20"], "alpha": [1]}))
+    names = [os.path.relpath(r.run_dir, tmp_path / "results").replace("\\", "/") for r in camp.runs()]
+    assert "essai/fashion_mnist/resnet20+resnet32_2agents/global_interaction/alpha1" in names
+    assert "essai/fashion_mnist/resnet20_2agents/dml/alpha1" in names
+    assert [n for n in names if n.startswith("reference")] == ["reference/fashion_mnist/resnet20_x2params_sgd_lr0.01"]
+    camp = Campaign(write_campaign(tmp_path, {"num_agents": [2, 3], "alpha": [1]}))
+    refs = [r for r in camp.runs() if r.experiment == "reference"]
+    assert [r.cfg.num_agents for r in refs] == [2, 3]                     # un grand modèle par K
+    assert all(camp.reference_for(r) is not None for r in camp.runs() if r.experiment == "collaboration")
+
+
+def test_heterogeneous_campaign_runs_and_reports_each_agent(tmp_path, fake_data):
+    from experiments.campaign import Campaign, main as campaign_main
+    path = write_campaign(tmp_path, {"arch": ["resnet20+mobilenetv2"], "alpha": [0, 1]})
+    camp = Campaign(path)
+    for i in range(len(camp.tasks())):
+        campaign_main([path, "--task", str(i), "--cpu", "--verbose", "0"])
+    campaign_main([path, "--merge"])
+    res = read(os.path.join(camp.runs()[1].run_dir, "results.json"))
+    assert len(res["runs"][0]["accuracy_agents"]) == 2 and len(res["agent_params"]) == 2
+    pytest.importorskip("matplotlib")
+    figures = tmp_path / "results" / "essai" / "fashion_mnist" / "resnet20+mobilenetv2_2agents" / "figures"
+    header = open(figures / "summary.csv").readline()
+    assert "agent1_resnet20_median" in header and "agent2_mobilenetv2_median" in header

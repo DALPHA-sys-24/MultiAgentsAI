@@ -55,8 +55,11 @@ class Collaboration(Experiment):
 
     def prepare(self, cfg, data):
         shape, num_classes = data["input_shape"], data["num_classes"]
-        params = count_trainable_params(cfg.arch, shape, num_classes)
-        log.info("[taille] %d x %s : %s param. chacun", cfg.num_agents, cfg.arch, f"{params:,}")
+        sizes = {a: count_trainable_params(a, shape, num_classes) for a in dict.fromkeys(cfg.agent_archs)}
+        for a, n in sizes.items():
+            log.info("[taille] %s : %s param. par agent", a, f"{n:,}")
+        params = [sizes[a] for a in cfg.agent_archs]
+        params = params[0] if len(sizes) == 1 else params      # liste par agent si hétérogènes
         for a in cfg.alphas:
             s = cfg.setup_for(a)
             log.info("[alpha = %g] loss %s (%s), consensus %s", a, s["loss_type"], s["loss_form"], s["strategy"])
@@ -70,11 +73,11 @@ class Collaboration(Experiment):
         alpha = task.params["alpha"]
         setup = cfg.setup_for(alpha)          # alpha = 0 : independent (CE) + majority
         strategy = setup["strategy"]
-        log.info("alpha = %g | %d x %s (%s %s + %s) | graine %d", alpha, cfg.num_agents, cfg.arch,
+        log.info("alpha = %g | %d agents %s (%s %s + %s) | graine %d", alpha, cfg.num_agents, cfg.arch,
                  setup["loss_type"], setup["loss_form"], strategy, seed)
         train = {**cfg.train_kwargs(verbose), "form": setup["loss_form"]}
         res = run_multi_experiment(
-            data, archs=cfg.arch, num_agents=cfg.num_agents, seed=seed,
+            data, archs=cfg.agent_archs, num_agents=cfg.num_agents, seed=seed,
             loss_type=setup["loss_type"], strategy=strategy, alpha=alpha, temperature=cfg.temperature,
             per_agent_views=cfg.per_agent_views,
             confidence_weights=cfg.confidence_weights, confidence_on_train=cfg.confidence_on_train,

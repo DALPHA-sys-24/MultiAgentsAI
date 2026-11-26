@@ -50,7 +50,7 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec des losses multi
 │   ├── datasets/               fashion_mnist, cifar10, cifar100
 │   ├── methods/                global_interaction[_additive], global_interaction_kl[_additive], dml, independent
 │   ├── collaboration.yaml, reference.yaml, hyperparameter_search.yaml
-│   └── campaigns/              alpha_sweep, lr_sweep, tau_sweep, hyperparameter_search, quick_test
+│   └── campaigns/              alpha_sweep, lr_sweep, tau_sweep, k_sweep, heterogeneous, hyperparameter_search, quick_test
 ├── slurm/
 │   ├── campaign.sh             job array : sbatch --array=0-<N-1> slurm/campaign.sh <campagne>
 │   ├── merge_campaign.sh       fusion + figures (soumise automatiquement)
@@ -248,6 +248,25 @@ f["val_per_class"][-1]        # (10 classes, K agents) à la dernière époque
 
 Les numéros d'agents n'ont pas de sens d'une graine à l'autre (agent 1 de la graine 0 ≠ agent 1 de la graine 1) :
 les figures par agent et par classe ont donc un panneau par graine. Seul K ≥ 2 est concerné (pas le grand modèle).
+
+## Agents hétérogènes et nombre d'agents K
+
+**Agents hétérogènes** : `arch` donne une architecture par agent, séparées par `+` (ou une liste YAML) :
+`arch: resnet32+mobilenetv2` entraîne 2 agents différents ensemble (K = nombre d'architectures, `num_agents` est alors
+ignoré). Dossier : `<campagne>/<dataset>/resnet32+mobilenetv2_2agents/<méthode>/<point>/`. Dans une campagne, mettre
+plusieurs paires dans la grille : `grid: {arch: [resnet32+mobilenetv2, resnet56+resnet20, resnet32]}`. α = 0 donne les
+mêmes architectures entraînées seules, la référence naturelle (comme dans DML). Pas de grand modèle pour une paire
+hétérogène ; les paramètres de la recherche (`tuned_params`) ne servent pas non plus : lr et optimiseur viennent des
+configs et de `settings` (un lr par agent possible : `lr: [0.01, 0.005]`). `summary.csv` donne l'accuracy de chaque
+agent (`agent1_resnet32_median`, `agent2_mobilenetv2_median`...). Campagne : `heterogeneous`.
+
+```bash
+python -m experiments.collaboration --arch resnet32+mobilenetv2 --dataset cifar100 --alphas 0 1
+```
+
+**Nombre d'agents** : `grid: {num_agents: [2, 3, 5, 8]}` donne un groupe par K, chacun avec son grand modèle (autant
+de paramètres que les K agents). La fusion ajoute `results/<campagne>/<dataset>/figures/<arch>_accuracy_vs_num_agents`
+(consensus et agent médian selon K, grand modèle de chaque K en pointillés). Campagne : `k_sweep`.
 
 ## Campagnes
 
@@ -503,6 +522,8 @@ Campagnes fournies :
 | `alpha_sweep` | 4 variantes de l'interaction globale et DML, α ∈ {0, 1, 10, 100}, K = 3, 5 graines, 50 époques, grand modèle | 170 |
 | `lr_sweep` | 4 variantes de l'interaction globale et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 210 |
 | `tau_sweep` | 4 variantes de l'interaction globale, α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 210 |
+| `k_sweep` | K ∈ {2, 3, 5, 8}, 5 méthodes, α ∈ {0, 1}, cifar10 et cifar100, 50 époques, un grand modèle par K | 280 |
+| `heterogeneous` | agents hétérogènes sur cifar100 : resnet32+mobilenetv2, resnet56+resnet20 et 2 × resnet32 (contrôle), 5 méthodes, α ∈ {0, 1}, 200 époques | 90 |
 | `quick_test` | test local sur CPU (2 époques, 500 images) | 8 |
 
 ### Balayage du learning rate (`lr_sweep`)

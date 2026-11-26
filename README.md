@@ -58,6 +58,8 @@ grid:                                  # produit cartésien : un dossier par poi
 reference: true                        # grand modèle seul, au lr de base (lr*)
 ```
 
+Agents hétérogènes : `arch: resnet32+mobilenetv2` (une architecture par agent, campagne `heterogeneous`). Nombre d'agents : `grid: {num_agents: [2, 3, 5, 8]}` (campagne `k_sweep`). Détails dans docs/GUIDE.md.
+
 Pour une nouvelle étude, copier une campagne et changer `grid` ou `settings`. `--set clé=valeur` remplace un réglage sans toucher au fichier (`--set epochs=2 n_runs=1`).
 
 ## Méthodes disponibles
@@ -81,7 +83,7 @@ configs/
 ├── collaboration.yaml         K agents      (defaults + cifar10 + global_interaction)
 ├── reference.yaml             grand modèle  (defaults + cifar10)
 ├── hyperparameter_search.yaml espace de recherche Optuna
-└── campaigns/                 alpha_sweep, lr_sweep, tau_sweep, hyperparameter_search, quick_test
+└── campaigns/                 alpha_sweep, lr_sweep, tau_sweep, k_sweep, heterogeneous, hyperparameter_search, quick_test
 ```
 
 Un fichier peut reprendre d'autres fichiers avec `defaults: [defaults, methods/dml]` ; la dernière valeur lue gagne. Pour un point de campagne, l'ordre est : `collaboration.yaml` < dataset < méthode < paramètres de la recherche < `settings` < valeurs de la grille. Une nouvelle méthode = un fichier dans `configs/methods/`.
@@ -134,6 +136,7 @@ Figures (médiane et bande q05–q95 sur les graines), refaites à chaque fusion
 | `diversity_vs_<param>` | désaccord entre agents |
 | `paired_difference` | écart d'accuracy graine par graine avec le grand modèle (sinon avec les agents indépendants) |
 | `learning_curves` | accuracy de validation par époque, un panneau par méthode |
+| `<arch>_accuracy_vs_num_agents` | accuracy selon K (campagne `k_sweep`), dans `results/<campagne>/<dataset>/figures/` |
 | `confidence_*` | poids de confiance w_k : par époque, selon τ, par agent et par classe (`confidence_weights: true`, voir docs/GUIDE.md) |
 
 ## Exemples d'exécution

@@ -34,6 +34,18 @@ CODE_DIR = os.path.dirname(os.path.abspath(__file__))  # dans le dépôt Git (po
 PRECISIONS = ("float32", "mixed_bfloat16")
 EVAL_ON = ("final", "best")
 REFERENCE_LOSSES = ("ce", "same_as_agents")
+# Agents hétérogènes : une architecture par agent, séparées par "+" (ex. resnet32+mobilenetv2)
+ARCH_SEP = "+"
+
+
+def agent_archs(arch) -> List[str]:
+    """resnet32+mobilenetv2 (ou [resnet32, mobilenetv2]) -> ["resnet32", "mobilenetv2"] ; resnet20 -> ["resnet20"]."""
+    parts = arch if isinstance(arch, (list, tuple)) else str(arch).split(ARCH_SEP)
+    return [str(a).strip() for a in parts if str(a).strip()]
+
+
+def is_heterogeneous(arch) -> bool:
+    return len(agent_archs(arch)) > 1
 
 # Stratégie de consensus imposée quand alpha = 0 (agents indépendants)
 STRATEGY_NO_INTERACTION = "majority"
@@ -227,15 +239,34 @@ class CollaborationConfig(TrainConfig):
     IGNORED_KEYS = ("big_model", "big_optimizer", "big_lr", "big_optimizer_kwargs", "reference_loss")
     method: Optional[str] = opt(None, "Nom de la méthode (dossier de résultats) ; défaut : <loss_type>_<loss_form>.",
                                 kind="str_or_none")
-    arch: str = opt("resnet20", "Architecture des agents.")
+    arch: str = opt("resnet20", "Architecture des agents ; une par agent séparées par + pour des agents "
+                                "hétérogènes (ex. resnet32+mobilenetv2 : num_agents vaut alors 2).")
     alphas: List[float] = opt([1.0], "Valeur(s) de alpha : une seule = un run simple, plusieurs = un balayage "
                                      "(alpha = 0 : agents indépendants en cross-entropy, vote majoritaire).",
                          kind="list_float")
     lr: Union[float, List[float]] = opt(0.01, "Un lr pour tous les agents, ou un par agent "
                                               "(0.1 fait diverger la loss multiplicative).", kind="per_agent")
 
+    def validate(self):
+        # agents hétérogènes : arch = "a+b" (ou liste [a, b]) ; K = nombre d'architectures
+        self.arch = ARCH_SEP.join(agent_archs(self.arch))
+        if is_heterogeneous(self.arch):
+            self.num_agents = len(agent_archs(self.arch))
+        return super().validate()
+
     def _extra_checks(self) -> List[str]:
-        return [] if self.alphas else ["alphas est vide : donne au moins une valeur (ex. --alphas 1)"]
+        errors = [] if self.alphas else ["alphas est vide : donne au moins une valeur (ex. --alphas 1)"]
+        from collaborative_learning.models import available_models
+        unknown = [a for a in agent_archs(self.arch) if a not in available_models()]
+        if unknown:
+            errors.append(f"arch = {unknown} : modèles disponibles {available_models()}")
+        return errors
+
+    @property
+    def agent_archs(self) -> List[str]:
+        """Architecture de chaque agent (K fois la même, ou une par agent si arch = a+b+...)."""
+        archs = agent_archs(self.arch)
+        return archs if len(archs) > 1 else archs * self.num_agents
 
     @property
     def method_name(self) -> str:

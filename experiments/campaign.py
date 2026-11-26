@@ -46,8 +46,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from collaborative_learning.utils.config import (CollaborationConfig, HyperparamSearchConfig, ReferenceConfig,
-                                                 config_from_dict, fmt_value)
+from collaborative_learning.utils.config import (ARCH_SEP, CollaborationConfig, HyperparamSearchConfig, ReferenceConfig,
+                                                 agent_archs, config_from_dict, fmt_value, is_heterogeneous)
 from collaborative_learning.utils.config_files import CONFIG_DIR, read_config_file, read_raw, resolve_config_path
 
 log = logging.getLogger("collaborative_learning")
@@ -137,7 +137,7 @@ class Campaign:
     # --- configs -------------------------------------------------------------
     def tuned_values(self, dataset: str, arch: str, out_dir: str) -> Tuple[Dict[str, Any], Optional[str]]:
         """Paramètres de la recherche d'hyperparamètres du dataset (ou {} s'il n'y en a pas)."""
-        if not self.use_tuned:
+        if not self.use_tuned or is_heterogeneous(arch):   # agents hétérogènes : réglages des configs / settings
             return {}, None
         folder = os.path.join(out_dir, "hyperparameter_search", dataset, arch)
         for name in (TUNED_FILE, LEGACY_TUNED_FILE):
@@ -147,12 +147,14 @@ class Campaign:
                 return {k: v for k, v in values.items() if k in TUNED_KEYS}, path
         return {}, None
 
-    def _values(self, base: str, dataset: str, method: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[str]]:
+    def _values(self, base: str, dataset: str, method: Optional[str] = None,
+                arch: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[str]]:
         values = read_config_file(base)
         values.update(read_config_file(f"datasets/{dataset}"))
         if method:
             values.update(read_config_file(f"methods/{method}"))
-        arch = self.settings.get("arch", values.get("arch", "resnet20"))
+        arch = arch or self.settings.get("arch", values.get("arch", "resnet20"))
+        arch = ARCH_SEP.join(agent_archs(arch))
         out_dir = self.settings.get("out_dir", values.get("out_dir", "results"))
         tuned, tuned_path = self.tuned_values(dataset, arch, out_dir)
         values.update(tuned)
@@ -182,7 +184,7 @@ class Campaign:
                 for point in self.points():
                     alpha = point.get("alpha")
                     m = INDEPENDENT if alpha is not None and float(alpha) == 0 else method
-                    values, tuned_path = self._values("collaboration", dataset, m)
+                    values, tuned_path = self._values("collaboration", dataset, m, arch=point.get("arch"))
                     for key, value in point.items():
                         if key == "alpha":
                             values["alphas"] = [float(value)]
@@ -195,10 +197,10 @@ class Campaign:
                         continue
                     seen.add(run_dir)
                     runs.append(Run("collaboration", dataset, cfg, run_dir, cfg.method_name, dict(point)))
-                    if self.reference:
+                    if self.reference and not is_heterogeneous(cfg.arch):   # pas de grand modèle pour a+b
                         references.setdefault((cfg.arch, cfg.num_agents), tuned_path)
             for (arch, k), tuned_path in references.items():
-                values, _ = self._values("reference", dataset)
+                values, _ = self._values("reference", dataset, arch=arch)
                 fields = {f.name for f in dataclasses.fields(ReferenceConfig)}
                 values = {key: v for key, v in values.items() if key in fields or key.startswith("_")}
                 values.update(arch=arch, num_agents=k)

@@ -1,0 +1,20 @@
+# Effet du nombre d'agents K : pour chaque K, les K agents face au grand modèle de même taille
+# (autant de paramètres que les K agents réunis : un grand modèle par K).
+#   Figures : results/k_sweep/<dataset>/figures/<arch>_accuracy_vs_num_agents (accuracy selon K),
+#   et les figures habituelles de chaque K dans results/k_sweep/<dataset>/<arch>_<K>agents/figures/.
+#   python -m experiments.campaign k_sweep --list      # nombre de tâches et commande sbatch
+#   sbatch --array=0-<N-1> slurm/campaign.sh k_sweep
+# alpha : remplacer 1 par le meilleur alpha de alpha_sweep (alpha = 0 : agents indépendants, gardé comme référence).
+# cifar100 : lancer d'abord la recherche d'hyperparamètres (campagne hyperparameter_search) pour avoir le bon lr.
+experiment: collaboration
+datasets: [cifar10, cifar100]
+methods: [global_interaction, dml, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive]
+use_tuned_params: true
+settings:
+  arch: resnet20
+  epochs: 50                        # comme alpha_sweep : le grand modèle K = 3 est partagé (mêmes réglages)
+  n_runs: 5
+grid:
+  num_agents: [2, 3, 5, 8]
+  alpha: [0, 1]
+reference: true

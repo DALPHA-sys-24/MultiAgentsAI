@@ -9,6 +9,7 @@ Pour chaque groupe (dataset, arch, K) d'une campagne, dans results/<campagne>/<d
     diversity_vs_<param>.png/.pdf    désaccord entre agents selon ce paramètre
     paired_difference.png/.pdf       écart d'accuracy avec le grand modèle, graine par graine
     learning_curves.png/.pdf         accuracy de validation par époque, un panneau par méthode
+    (num_agents balayé) results/<campagne>/<dataset>/figures/<arch>_accuracy_vs_num_agents : accuracy selon K
     confidence_*                     poids de confiance w_k (si confidence_weights: true) : max_k w_k et poids sur
                                      les agents justes par époque et selon chaque paramètre
     confidence/<méthode>_<point>_weights_per_agent_<val|train>   w_k de chaque agent par époque, un panneau par graine
@@ -542,9 +543,21 @@ SUMMARY_METRICS = [("consensus", "accuracy_consensus"), ("mean_ensemble", "accur
                    ("ece_consensus", "ece_consensus")]
 
 
+def agent_columns(entries) -> List[str]:
+    """Nom de chaque agent pour summary.csv : agent1_resnet32, agent2_mobilenetv2... (même K dans un groupe)."""
+    cfg = entries[0]["config"] if entries else {}
+    archs = str(cfg.get("arch", "")).split("+")
+    k = int(cfg.get("num_agents") or len(archs))
+    archs = archs if len(archs) == k else archs[:1] * k
+    return [f"agent{i + 1}_{a}" for i, a in enumerate(archs)]
+
+
 def write_summary_csv(entries, reference, params: Sequence[str], path: str) -> None:
     header = ["method", *params, "alpha", "loss", "strategy", "n_seeds", "run_dir"]
     for name, _ in SUMMARY_METRICS:
+        header += [f"{name}_median", f"{name}_q05", f"{name}_q95"]
+    agents = agent_columns(entries)           # accuracy de chaque agent (utile surtout pour des agents hétérogènes)
+    for name in agents:
         header += [f"{name}_median", f"{name}_q05", f"{name}_q95"]
     rows = []
     for e in entries:
@@ -557,6 +570,8 @@ def write_summary_csv(entries, reference, params: Sequence[str], path: str) -> N
                    f"{rs[0].get('loss_type')} ({rs[0].get('loss_form')})", rs[0].get("strategy"), len(rs), e["dir"]]
             for _, key in SUMMARY_METRICS:
                 row += [f"{v:.6g}" for v in stats([r.get(key) for r in rs])]
+            for i in range(len(agents)):
+                row += [f"{v:.6g}" for v in stats([(r.get("accuracy_agents") or [None] * len(agents))[i] for r in rs])]
             rows.append(row)
     if reference:
         runs = reference["results"]["runs"]
@@ -566,6 +581,7 @@ def write_summary_csv(entries, reference, params: Sequence[str], path: str) -> N
         for name, _ in SUMMARY_METRICS:
             key = {"consensus": "accuracy", "nll_consensus": "nll", "ece_consensus": "ece"}.get(name)
             row += [f"{v:.6g}" for v in stats([r[key] for r in runs])] if key else ["", "", ""]
+        row += ["", "", ""] * len(agents)
         rows.append(row)
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", newline="") as f:
@@ -669,13 +685,83 @@ def campaign_groups(campaign) -> Dict[tuple, dict]:
     return out
 
 
+def group_title(dataset: str, arch: str, k: int) -> str:
+    return f"{arch.replace('+', ' + ')} — {dataset}" if "+" in arch else f"{k} × {arch} — {dataset}"
+
+
+def plot_vs_num_agents(groups: Dict[int, dict], title: str, scale=100):
+    """
+    Accuracy selon le nombre d'agents K (consensus et agent médian), une courbe par méthode et point de la
+    grille ; grand modèle de chaque K (autant de paramètres que les K agents) en pointillés gris.
+    `groups` : {K: {"entries": [...], "reference": ...}} pour un même dataset et une même architecture.
+    """
+    import matplotlib.pyplot as plt
+    ks = sorted(groups)
+    all_entries = [e for g in groups.values() for e in g["entries"]]
+    hide = constant_keys(all_entries) | {"num_agents"}
+    series: Dict[tuple, Dict[int, list]] = {}
+    for k in ks:
+        for e in groups[k]["entries"]:
+            label = entry_name(e, hide)
+            series.setdefault((e["method"], label), {}).setdefault(k, []).extend(rows_of(e))
+    shades = {}
+    for method, label in series:
+        shades.setdefault(method, []).append(label)
+    color = {(m, l): c for m, labels in shades.items() for l, c in zip(labels, method_ramp(m, len(labels)))}
+    keys = [("accuracy_consensus", f"Consensus — {title}"), ("accuracy_agent_median", "Agent médian (un agent seul)")]
+    fig, axes = plt.subplots(1, 2, figsize=(12.4, 4.4), squeeze=False, sharey=True)
+    for ax, (key, sub) in zip(axes[0], keys):
+        for (method, label), by_k in series.items():
+            xs = [k for k in ks if k in by_k]
+            s = np.array([stats([r.get(key) * scale for r in by_k[k] if r.get(key) is not None]) for k in xs])
+            c = color[(method, label)]
+            ax.fill_between(xs, s[:, 1], s[:, 2], color=c, alpha=0.15, lw=0)
+            ax.plot(xs, s[:, 0], color=c, marker="o", ms=6, mec=SURFACE, mew=1.2, lw=2, label=label)
+        ref = [(k, stats([r["accuracy"] * scale for r in groups[k]["reference"]["results"]["runs"]]))
+               for k in ks if groups[k].get("reference")]
+        if ref:
+            xs, s = [k for k, _ in ref], np.array([v for _, v in ref])
+            ax.fill_between(xs, s[:, 1], s[:, 2], color=BIG_COLOR, alpha=0.08, lw=0)
+            ax.plot(xs, s[:, 0], color=BIG_COLOR, ls=":", lw=2, marker="s", ms=5,
+                    label="grand modèle seul (autant de paramètres que les K agents)")
+        ax.set_xticks(ks, [str(k) for k in ks])
+        ax.set_xlabel("nombre d'agents K", color=INK)
+        ax.set_title(sub, color=INK, loc="left", fontweight="bold")
+        _style(ax)
+    axes[0][0].set_ylabel("accuracy de test (%)", color=INK)
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(1.0, 0.92), frameon=False)
+    fig.tight_layout()
+    return fig
+
+
 def plot_campaign(campaign, formats: Sequence[str] = ("png", "pdf")) -> Dict[tuple, Dict[str, List[str]]]:
-    """Figures de chaque groupe (dataset, arch, K) d'une campagne, dans .../<arch>_<K>agents/figures/."""
+    """
+    Figures de chaque groupe (dataset, arch, K) d'une campagne, dans .../<arch>_<K>agents/figures/.
+    Si la grille balaie num_agents : en plus, accuracy selon K dans results/<campagne>/<dataset>/figures/.
+    """
     params = swept_params(campaign) or ["alpha"]
     out = {}
-    for (dataset, arch, k), g in campaign_groups(campaign).items():
+    groups = campaign_groups(campaign)
+    for (dataset, arch, k), g in groups.items():
         out[(dataset, arch, k)] = plot_entries(g["entries"], g["reference"], params, os.path.join(g["dir"], "figures"),
-                                               f"{k} × {arch} — {dataset}", formats)
+                                               group_title(dataset, arch, k), formats)
+    if len(campaign.grid.get("num_agents", [])) >= 2:
+        plt = _setup_matplotlib()
+        by_arch: Dict[tuple, Dict[int, dict]] = {}
+        for (dataset, arch, k), g in groups.items():
+            if g["entries"]:
+                by_arch.setdefault((dataset, arch), {})[k] = g
+        for (dataset, arch), gs in by_arch.items():
+            if len(gs) < 2:
+                continue
+            folder = os.path.join(os.path.dirname(next(iter(gs.values()))["dir"]), "figures")
+            os.makedirs(folder, exist_ok=True)
+            fig = plot_vs_num_agents(gs, f"{arch} — {dataset}")
+            name = f"{arch}_accuracy_vs_num_agents"
+            out[(dataset, arch, "num_agents")] = {name: _save(fig, folder, name, formats)}
+            plt.close(fig)
+            log.info("[figures] %s -> %s", name, os.path.abspath(folder))
     return out
 
 
