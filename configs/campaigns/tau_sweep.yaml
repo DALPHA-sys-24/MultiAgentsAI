@@ -9,7 +9,7 @@
 # montre l'effet de tau sur le seul consensus.
 experiment: collaboration
 datasets: [fashion_mnist, cifar10]
-methods: [global_interaction, global_interaction_additive]
+methods: [global_interaction, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive]
 use_tuned_params: true
 settings:                            # mêmes réglages que alpha_sweep : le grand modèle est partagé
   arch: resnet20

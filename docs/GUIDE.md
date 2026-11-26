@@ -130,7 +130,7 @@ Loss `dml` : I_k = 1/(K−1) · Σ_{j≠k} KL(y^j ‖ y^k), les prédictions des
 python -m experiments.collaboration --config configs/methods/dml.yaml --alphas 0 1
 ```
 
-Dans une campagne : `methods: [global_interaction, dml]` (c'est le cas de `alpha_sweep` et `lr_sweep`). Pour la variante multiplicative, créer `configs/methods/dml_multiplicative.yaml` (`defaults: [methods/dml]`, `method: dml_multiplicative`, `loss_form: multiplicative`) et l'ajouter à `methods:`.
+Dans une campagne : `methods: [global_interaction, dml]` (`alpha_sweep` et `lr_sweep` ont les 5 méthodes : les 4 variantes de l'interaction globale et la DML). Pour la variante multiplicative, créer `configs/methods/dml_multiplicative.yaml` (`defaults: [methods/dml]`, `method: dml_multiplicative`, `loss_form: multiplicative`) et l'ajouter à `methods:`.
 
 Deux différences avec le papier :
 - les K agents sont mis à jour en même temps à partir du même forward, alors que le papier les met à jour l'un après l'autre dans un pas (la mise à jour simultanée est celle de la plupart des implémentations publiques) ;
@@ -484,7 +484,7 @@ Un seul script sbatch pour toutes les campagnes. Depuis la racine du dépôt, su
 
 ```bash
 python -m experiments.campaign alpha_sweep --list         # N tâches, dossiers, données téléchargées
-sbatch --array=0-59 slurm/campaign.sh alpha_sweep         # la commande exacte est affichée par --list
+sbatch --array=0-169 slurm/campaign.sh alpha_sweep        # la commande exacte est affichée par --list
 ```
 
 - **Une tâche du job array = une tâche de la campagne** : un dataset × une méthode × un point de la grille × une graine, ou une graine du grand modèle, ou un worker Optuna. Les K agents d'un run sont dans la même tâche (loss commune). L'ordre des tâches est celui de `--list`.
@@ -500,9 +500,9 @@ Campagnes fournies :
 | Campagne | Contenu | Tâches |
 |---|---|---|
 | `hyperparameter_search` | Optuna sur un ResNet-20, Fashion-MNIST et CIFAR-10, 8 workers | 16 |
-| `alpha_sweep` | interaction globale et DML, α ∈ {0, 10, 100}, K = 3, 5 graines, grand modèle | 60 |
-| `lr_sweep` | interaction globale et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 90 |
-| `tau_sweep` | interaction globale multiplicative et additive, α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 110 |
+| `alpha_sweep` | 4 variantes de l'interaction globale et DML, α ∈ {0, 1, 10, 100}, K = 3, 5 graines, 50 époques, grand modèle | 170 |
+| `lr_sweep` | 4 variantes de l'interaction globale et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 210 |
+| `tau_sweep` | 4 variantes de l'interaction globale, α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 210 |
 | `quick_test` | test local sur CPU (2 époques, 500 images) | 8 |
 
 ### Balayage du learning rate (`lr_sweep`)

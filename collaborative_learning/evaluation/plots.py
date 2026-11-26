@@ -34,14 +34,22 @@ logging.getLogger("fontTools").setLevel(logging.WARNING)   # sinon le sous-ensem
 Q_LO, Q_HI = 0.05, 0.95
 # Une couleur par méthode, la même dans toutes les figures et les notebooks ; grand modèle en gris foncé.
 # Chaque méthode a aussi sa gamme (clair -> foncé) quand elle a plusieurs courbes (plusieurs alpha, lr...).
-METHOD_COLORS = {"global_interaction": "#2a78d6", "dml": "#eb6834", "independent": "#9b59b6"}
-METHOD_CMAPS = {"global_interaction": "Blues", "dml": "Oranges", "independent": "Purples"}
-COLORS = ["#1baf7a", "#c9a227", "#d6457a", "#0e9aa7", "#8c564b"]          # autres méthodes, dans l'ordre
-OTHER_CMAPS = ["Greens", "YlOrBr", "RdPu", "GnBu", "copper_r"]
+# Variantes de l'interaction globale : bleu / vert / turquoise / rose ; DML orange ; indépendants violet.
+METHOD_COLORS = {"global_interaction": "#2a78d6", "dml": "#eb6834", "independent": "#9b59b6",
+                 "global_interaction_additive": "#1baf7a", "global_interaction_kl": "#0e9aa7",
+                 "global_interaction_kl_additive": "#d6457a"}
+METHOD_CMAPS = {"global_interaction": "Blues", "dml": "Oranges", "independent": "Purples",
+                "global_interaction_additive": "Greens", "global_interaction_kl": "GnBu",
+                "global_interaction_kl_additive": "RdPu"}
+COLORS = ["#c9a227", "#8c564b", "#5c6bc0", "#7f7f7f"]          # autres méthodes, dans l'ordre
+OTHER_CMAPS = ["YlOrBr", "copper_r", "Purples", "Greys"]
 BIG_COLOR = "#3a3935"
 INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e0", "#ffffff"
 INDEPENDENT = "independent"
-METHOD_LABELS = {"global_interaction": "interaction globale", "dml": "DML", INDEPENDENT: "agents indépendants"}
+METHOD_LABELS = {"global_interaction": "interaction globale", "dml": "DML", INDEPENDENT: "agents indépendants",
+                 "global_interaction_additive": "interaction globale (additive)",
+                 "global_interaction_kl": "interaction globale KL",
+                 "global_interaction_kl_additive": "interaction globale KL (additive)"}
 PARAM_LABELS = {"alpha": "alpha  (0 = agents indépendants, cross-entropy + vote majoritaire)",
                 "lr": "learning rate des agents (échelle log)",
                 "temperature": "température τ des poids de confiance w_k = softmax(−H_k / τ)  (échelle log)"}
@@ -68,7 +76,8 @@ def _read_json(path: str) -> Optional[dict]:
         return json.load(f)
 
 
-METHOD_ORDER = ["global_interaction", "dml", INDEPENDENT]   # même couleur d'une figure à l'autre
+METHOD_ORDER = ["global_interaction", "global_interaction_additive", "global_interaction_kl",
+                "global_interaction_kl_additive", "dml", INDEPENDENT]   # même couleur d'une figure à l'autre
 
 
 def method_label(method: str) -> str:

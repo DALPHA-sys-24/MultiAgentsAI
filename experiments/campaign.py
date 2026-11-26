@@ -34,7 +34,7 @@ Exemples (depuis la racine du dépôt) :
     python -m experiments.campaign lr_sweep --merge        # results.json de chaque dossier + figures
     python -m experiments.campaign quick_test --cpu        # tout, l'un après l'autre (test local)
     python -m experiments.campaign lr_sweep --list --set epochs=2 train_subset=500
-    sbatch --array=0-89 slurm/campaign.sh lr_sweep         # cluster
+    sbatch --array=0-209 slurm/campaign.sh lr_sweep        # cluster
 """
 import argparse
 import dataclasses

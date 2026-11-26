@@ -49,7 +49,7 @@ Exemple de campagne (`configs/campaigns/lr_sweep.yaml`) :
 ```yaml
 experiment: collaboration
 datasets: [fashion_mnist, cifar10]
-methods: [global_interaction, dml]     # configs/methods/<nom>.yaml
+methods: [global_interaction, dml, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive]   # configs/methods/<nom>.yaml
 use_tuned_params: true                 # meilleurs paramètres de la recherche d'hyperparamètres
 settings: {arch: resnet20, num_agents: 3, epochs: 200, n_runs: 5}
 grid:                                  # produit cartésien : un dossier par point
@@ -60,13 +60,24 @@ reference: true                        # grand modèle seul, au lr de base (lr*)
 
 Pour une nouvelle étude, copier une campagne et changer `grid` ou `settings`. `--set clé=valeur` remplace un réglage sans toucher au fichier (`--set epochs=2 n_runs=1`).
 
+## Méthodes disponibles
+
+| Fichier `configs/methods/` | Loss de l'agent k | I_k |
+|---|---|---|
+| `global_interaction` | L_k · (L_k + α I_k) | CE(y^cons, y^k) + CE(y, y^cons) |
+| `global_interaction_additive` | L_k + α I_k | CE(y^cons, y^k) + CE(y, y^cons) |
+| `global_interaction_kl` | L_k · (L_k + α I_k) | KL(y^cons ‖ y^k) + CE(y, y^cons) |
+| `global_interaction_kl_additive` | L_k + α I_k | KL(y^cons ‖ y^k) + CE(y, y^cons) |
+| `dml` | L_k + α I_k | moyenne des KL(y^j ‖ y^k), j ≠ k (Zhang et al., 2018) |
+| `independent` | L_k | 0 (utilisée automatiquement pour α = 0, à ne pas mettre dans `methods:`) |
+
 ## Configs
 
 ```
 configs/
 ├── defaults.yaml              réglages communs (epochs, optimiseur, lr, augmentation...)
 ├── datasets/<dataset>.yaml    ce qui est propre à un jeu de données
-├── methods/<méthode>.yaml     global_interaction, dml, independent (loss, forme, consensus)
+├── methods/<méthode>.yaml     global_interaction[_additive], global_interaction_kl[_additive], dml, independent
 ├── collaboration.yaml         K agents      (defaults + cifar10 + global_interaction)
 ├── reference.yaml             grand modèle  (defaults + cifar10)
 ├── hyperparameter_search.yaml espace de recherche Optuna
@@ -125,22 +136,129 @@ Figures (médiane et bande q05–q95 sur les graines), refaites à chaque fusion
 | `learning_curves` | accuracy de validation par époque, un panneau par méthode |
 | `confidence_*` | poids de confiance w_k : par époque, selon τ, par agent et par classe (`confidence_weights: true`, voir docs/GUIDE.md) |
 
-## Cluster SLURM
+## Exemples d'exécution
 
-Un seul script pour toutes les campagnes :
+Toutes les commandes se lancent depuis la racine du dépôt (le dossier qui contient `collaborative_learning/`).
 
-```bash
-python -m experiments.campaign lr_sweep --list      # affiche N et la commande exacte
-sbatch --array=0-89 slurm/campaign.sh lr_sweep      # une tâche GPU par graine x point x méthode x dataset
-```
-
-La tâche 0 vérifie que `--array` couvre bien toutes les tâches et soumet la fusion (`slurm/merge_campaign.sh`), qui démarre quand tout le job array est fini : `results.json` de chaque dossier, puis les figures. Les K agents d'un run restent dans la même tâche. Les modules chargés sont dans `slurm/modules.sh` (PyYAML est nécessaire). Ordre habituel :
+### En local (GPU ou CPU)
 
 ```bash
-sbatch --array=0-15 slurm/campaign.sh hyperparameter_search   # optionnel
-sbatch --array=0-59 slurm/campaign.sh alpha_sweep
-sbatch --array=0-89 slurm/campaign.sh lr_sweep
+python -m experiments.campaign quick_test --cpu        # test complet en quelques minutes (2 époques, 500 images)
+python -m experiments.campaign alpha_sweep --list      # tâches numérotées et dossiers, sans rien lancer
+python -m experiments.campaign alpha_sweep             # toutes les tâches l'une après l'autre, puis fusion et figures
+python -m experiments.campaign alpha_sweep --task 7    # une seule tâche (reprend si elle a été coupée)
+python -m experiments.campaign alpha_sweep --merge     # results.json de chaque dossier + figures
+python -m experiments.campaign tau_sweep --set epochs=2 n_runs=1 train_subset=2000   # essai rapide d'une campagne
+python -m experiments.plot_results alpha_sweep         # refaire seulement les figures
+python -m pytest                                       # tests
 ```
+
+Sans campagne, une expérience seule (options : `--help`) :
+
+```bash
+python -m experiments.collaboration --dataset fashion_mnist --num-agents 3 --alphas 0 1 10 --n-runs 3
+python -m experiments.collaboration --config configs/methods/global_interaction_kl_additive.yaml --alphas 1
+python -m experiments.reference --dataset cifar10 --num-agents 3          # grand modèle seul
+python -m experiments.hyperparameter_search --dataset cifar10 --arch resnet20
+```
+
+### Sur le cluster (SLURM)
+
+Sur le nœud de connexion, depuis la racine du dépôt (les modules sont chargés par `slurm/modules.sh`, PyYAML est nécessaire) :
+
+```bash
+source slurm/modules.sh
+python -m experiments.campaign lr_sweep --list         # N tâches, commande sbatch exacte, données téléchargées
+sbatch --array=0-209 slurm/campaign.sh lr_sweep        # une tâche GPU par (dataset, méthode, point, graine) + grand modèle
+sbatch --array=7 slurm/campaign.sh lr_sweep            # relancer une seule tâche
+squeue -u $USER                                        # suivi ; sorties dans slurm_logs/campaign_<job>_<tâche>.out/.err
+```
+
+La tâche 0 vérifie que `--array` couvre toutes les tâches et soumet la fusion (`slurm/merge_campaign.sh`), qui démarre quand tout le job array est fini : `results.json` de chaque dossier, puis les figures. Relancer la même commande ne refait que les tâches non terminées ; une tâche coupée reprend à sa dernière époque. Les K agents d'un run restent dans la même tâche.
+
+Deux campagnes qui partagent le grand modèle (ex. `alpha_sweep` et `lr_sweep`) : les lancer l'une après l'autre.
+
+```bash
+JOB=$(sbatch --parsable --array=0-169 slurm/campaign.sh alpha_sweep)
+sbatch --dependency=afterany:$JOB --array=0-209 slurm/campaign.sh lr_sweep
+```
+
+Ordre habituel : `hyperparameter_search` (optionnel, écrit `tuned_params.yaml`), puis les campagnes. Ensuite, rapatrier `results/` sur la machine locale (ex. `rsync -av cluster:MultiAgentsAI/results/ results/`) pour les notebooks.
+
+### Dans Jupyter
+
+```bash
+pip install jupyterlab && jupyter lab notebooks/
+```
+
+| Notebook | Contenu |
+|---|---|
+| `effect_of_alpha.ipynb` | une méthode : accuracy, gain sur les agents indépendants, diversité, calibration selon α |
+| `agents_vs_big_model.ipynb` | un point (méthode, α...) face au grand modèle seul, graine par graine |
+| `compare_methods.ipynb` | toutes les méthodes et tous les points d'un groupe (dataset, K) |
+
+Régler la première cellule puis *Run All* ; les figures vont dans `results/<campagne>/<dataset>/<arch>_<K>agents/figures/notebooks/` :
+
+```python
+RESULTS_ROOT = "../results"   # "../results_quick_test" pour quick_test
+CAMPAIGN = "lr_sweep"         # nom dans configs/campaigns/
+DATASET = "cifar10"           # None = le premier de la campagne
+K = 3
+METHOD = "global_interaction_kl"
+```
+
+### Fonctions importantes (Python, script ou notebook)
+
+Lire les résultats d'une campagne :
+
+```python
+import sys; sys.path.insert(0, "..")        # depuis notebooks/ : racine du dépôt
+from experiments.campaign import Campaign
+from collaborative_learning.evaluation.plots import campaign_groups, rows_of, stats, entry_name
+
+campaign = Campaign("alpha_sweep", {"out_dir": "../results"})
+for (dataset, arch, k), group in campaign_groups(campaign).items():
+    for e in group["entries"]:                        # un dossier = une méthode x un point de la grille
+        med, q05, q95 = stats([r["accuracy_consensus"] for r in rows_of(e)])
+        print(dataset, k, entry_name(e), f"{100 * med:.2f} [{100 * q05:.2f} ; {100 * q95:.2f}]")
+```
+
+Poids de confiance w_k par classe et par époque, et leurs figures :
+
+```python
+from collaborative_learning.evaluation.plots import load_confidence, plot_agent_weights, plot_class_weights
+
+e = group["entries"][0]
+conf = load_confidence(e)                             # {"alpha10_seed0": {...}, ...}
+conf["alpha10_seed0"]["val_per_class"][-1]            # (classes, K) à la dernière époque
+plot_class_weights(e, "val")                          # figure classe x agent, un panneau par graine
+plot_agent_weights(e, "val")                          # w_k de chaque agent par époque
+```
+
+Entraîner K agents directement :
+
+```python
+from collaborative_learning import load_dataset
+from collaborative_learning.training.runner import run_multi_experiment
+
+data = load_dataset("fashion_mnist", val_size=5000)
+res = run_multi_experiment(data, archs="resnet20", num_agents=3, loss_type="global_interaction_kl",
+                           form="additive", alpha=1.0, temperature=1.0, epochs=5, lr=0.01, seed=0,
+                           confidence_weights=True)
+print(res["accuracy_consensus"], res["accuracy_agents"], res["history"]["val_w_max"])
+```
+
+Lire une config comme le font les scripts, et toutes les figures d'une campagne :
+
+```python
+from collaborative_learning.utils.config import CollaborationConfig, load_config
+from collaborative_learning.evaluation.plots import plot_campaign
+
+cfg = load_config(CollaborationConfig, "configs/collaboration.yaml", overrides={"epochs": 2})
+plot_campaign(Campaign("lr_sweep"))                   # = python -m experiments.plot_results lr_sweep
+```
+
+Ajouter une loss : `@register_loss("mon_nom")` dans `collaborative_learning/core/losses.py`, puis un fichier `configs/methods/mon_nom.yaml` (voir docs/GUIDE.md).
 
 ## Organisation du code
 

@@ -3,13 +3,13 @@
 #   sbatch --array=0-<N-1> slurm/campaign.sh alpha_sweep
 experiment: collaboration
 datasets: [fashion_mnist, cifar10]
-methods: [global_interaction, dml]   # configs/methods/ ; alpha = 0 -> agents indépendants, entraînés une seule fois
+methods: [global_interaction, dml, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive]   # configs/methods/ ; alpha = 0 -> agents indépendants, entraînés une seule fois
 use_tuned_params: true               # paramètres de results/hyperparameter_search/<dataset>/<arch>/ s'ils existent
 settings:                            # identiques pour toute la campagne
   arch: resnet20
   num_agents: 3
-  epochs: 200
+  epochs: 50
   n_runs: 5
 grid:                                # produit cartésien : un dossier par point
-  alpha: [0, 10, 100]
+  alpha: [0, 1, 10, 100]
 reference: true                      # grand modèle seul (même nombre de paramètres), au lr de base (lr*)
