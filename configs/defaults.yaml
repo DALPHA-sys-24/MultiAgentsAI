@@ -14,6 +14,11 @@ train_subset: null          # N premiers exemples du train (tests rapides)
 n_runs: 3                   # graines 0 à n_runs - 1
 eval_on: final              # test évalué sur les poids finaux (ou best : meilleure val_accuracy)
 checkpoint_every: 1
+# Poids de confiance w_k = softmax(-H_k / tau), K agents seulement (sans effet sur l'entraînement) :
+# à chaque époque, moyenne exacte sur tout l'ensemble, au total et par classe (vraie étiquette).
+# Historique : val_w_agent<k>, val_w_max, val_w_on_correct ; par classe : tasks/<tâche>/confidence_weights.npz
+confidence_weights: true    # sur toute la validation (presque gratuit)
+confidence_on_train: false  # aussi sur tout le train : + une passe d'inférence par époque (~ +20-30 % de temps)
 precision: float32          # mixed_bfloat16 sur RTX 4060
 jit: auto
 steps_per_execution: 8

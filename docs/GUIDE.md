@@ -48,9 +48,9 @@ Apprentissage collaboratif de K agents (ResNet, MobileNet) avec des losses multi
 ├── configs/
 │   ├── defaults.yaml           réglages communs à toutes les expériences
 │   ├── datasets/               fashion_mnist, cifar10, cifar100
-│   ├── methods/                global_interaction, dml, independent
+│   ├── methods/                global_interaction[_additive], global_interaction_kl[_additive], dml, independent
 │   ├── collaboration.yaml, reference.yaml, hyperparameter_search.yaml
-│   └── campaigns/              alpha_sweep, lr_sweep, hyperparameter_search, quick_test
+│   └── campaigns/              alpha_sweep, lr_sweep, tau_sweep, hyperparameter_search, quick_test
 ├── slurm/
 │   ├── campaign.sh             job array : sbatch --array=0-<N-1> slurm/campaign.sh <campagne>
 │   ├── merge_campaign.sh       fusion + figures (soumise automatiquement)
@@ -85,7 +85,8 @@ Contenu d'un dossier de run (agents ou grand modèle) :
 ├── config.json             réglages, tailles des modèles, environnement (commit Git, versions)
 ├── results.json            résumé (médiane [q05 ; q95]) et détail par graine
 ├── test_probabilities/     probabilités de test (.npy) : alpha<a>_seed<s>.npy (agents), seed<s>.npy (grand modèle)
-├── tasks/<tâche>/          une tâche : result.json, test_probabilities.npy, history.csv, checkpoint/
+├── confidence_weights/     poids de confiance w_k par époque, au total et par classe : alpha<a>_seed<s>.npz
+├── tasks/<tâche>/          une tâche : result.json, test_probabilities.npy, history.csv, confidence_weights.npz, checkpoint/
 │                           (alpha1_seed0, alpha1_seed1... ; seed0, seed1... pour le grand modèle)
 └── logs/                   journal de chaque processus (all.txt, task_003.txt, merge.txt)
 ```
@@ -154,6 +155,10 @@ Pour chaque (dataset, arch, K) de la campagne, compare toutes les méthodes et t
 | `diversity_vs_<param>.png/.pdf` | désaccord entre agents |
 | `paired_difference.png/.pdf` | écart d'accuracy à graine égale avec le grand modèle (sinon avec les agents indépendants), et graines gagnées |
 | `learning_curves.png/.pdf` | accuracy de validation du consensus par époque, un panneau par méthode, grand modèle en pointillés |
+| `confidence_max_curves`, `confidence_correct_curves` | par époque : poids du plus confiant max_k w_k, et poids total sur les agents justes |
+| `confidence_vs_<param>` | les mêmes à l'époque évaluée, selon chaque paramètre balayé (ex. τ dans `tau_sweep`) |
+| `confidence/<méthode>_<point>_weights_per_agent_<val\|train>` | w_k de chaque agent par époque, un panneau par graine |
+| `confidence/<méthode>_<point>_weights_per_class_<val\|train>` | w_k moyen par classe × agent à la dernière époque, un panneau par graine |
 
 Les points alpha = 0 (agents indépendants) sont repris dans la courbe de chaque méthode. Les PDF gardent le texte en vrai texte (polices TrueType), pour LaTeX. Sur le cluster, le job de fusion fait les figures tout seul. Pas de GPU nécessaire, quelques secondes sur le nœud de connexion.
 
@@ -218,7 +223,31 @@ Ajouter un réglage : ajouter un champ dans la dataclass (`mon_reglage: float = 
 | `wd_exclude_norm_bias` | `true`, `false` | weight decay hors BatchNorm et biais |
 | `eval_on` | `final`, `best` | poids évalués sur le test |
 | `checkpoint_every` | entier | fréquence de sauvegarde de l'état de reprise |
+| `confidence_weights` | `true` (défaut), `false` | poids de confiance w_k à chaque époque sur toute la validation, au total et par classe |
+| `confidence_on_train` | `false` (défaut), `true` | idem sur tout le train (une passe d'inférence de plus par époque, ~ +20-30 %) |
 | `optimizer_kwargs` | dictionnaire | ex. `{global_clipnorm: 1.0}` ou `{use_ema: true}` |
+
+### Poids de confiance w_k
+
+Avec `confidence_weights: true` (dans `defaults.yaml`, donc partout), à la fin de chaque époque, les poids
+w_k(x) = softmax(−H_k(x)/τ) sont calculés sur **toutes** les images de la validation (et du train si
+`confidence_on_train: true`, sans augmentation), avec les poids de fin d'époque. Moyennes exactes, image par image,
+regroupées selon la vraie classe. Rien ne change dans l'entraînement (vérifié : mêmes historiques avec ou sans).
+
+- `history.csv` / `results.json` : `val_w_agent<k>` (moyenne de w_k), `val_w_max` (moyenne de max_k w_k :
+  1/K = uniforme, 1 = un seul agent décide), `val_w_on_correct` (poids total des agents justes) ; `train_...` pour le train.
+- `confidence_weights/alpha<a>_seed<s>.npz`, par graine : `epochs`, `val_overall[époque, agent]`,
+  `val_per_class[époque, classe, agent]`, `val_per_class_w_max[époque, classe]`, `val_w_max`, `val_w_on_correct`,
+  `val_class_counts`, `temperature` (et les mêmes en `train_`).
+
+```python
+import numpy as np
+f = np.load("results/tau_sweep/cifar10/resnet20_3agents/global_interaction/alpha10_temperature1/confidence_weights/alpha10_seed0.npz")
+f["val_per_class"][-1]        # (10 classes, K agents) à la dernière époque
+```
+
+Les numéros d'agents n'ont pas de sens d'une graine à l'autre (agent 1 de la graine 0 ≠ agent 1 de la graine 1) :
+les figures par agent et par classe ont donc un panneau par graine. Seul K ≥ 2 est concerné (pas le grand modèle).
 
 ## Campagnes
 
@@ -243,6 +272,17 @@ python -m experiments.campaign lr_sweep --list --set epochs=2 n_runs=1
 ```
 
 Le grand modèle est rangé dans `results/reference/`, hors de la campagne : deux campagnes avec le même dataset, la même architecture, le même K et les mêmes réglages de base (ex. `alpha_sweep` et `lr_sweep`) le partagent, et il n'est entraîné qu'une fois. Une valeur de `num_agents` dans la grille donne un grand modèle par K.
+
+## Variantes de l'interaction globale
+
+| Méthode (`configs/methods/`) | loss_type | I_k |
+|---|---|---|
+| `global_interaction` / `global_interaction_additive` | `global_interaction` | CE(y^cons, y^k) + CE(y, y^cons) |
+| `global_interaction_kl` / `global_interaction_kl_additive` | `global_interaction_kl` | KL(y^cons ‖ y^k) + CE(y, y^cons) |
+
+KL(y^cons ‖ y^k) = CE(y^cons, y^k) − H(y^cons) : le terme local vaut 0 quand l'agent suit le consensus. Le gradient
+passe par le consensus dans les deux cas (pas de stop_gradient) ; la version KL n'a plus le terme −∇H(y^cons) qui
+pousse le consensus vers une faible entropie. Forme multiplicative L_k·(L_k + α I_k) ou additive L_k + α I_k.
 
 ## Ajouter une loss ou une stratégie
 
@@ -462,6 +502,7 @@ Campagnes fournies :
 | `hyperparameter_search` | Optuna sur un ResNet-20, Fashion-MNIST et CIFAR-10, 8 workers | 16 |
 | `alpha_sweep` | interaction globale et DML, α ∈ {0, 10, 100}, K = 3, 5 graines, grand modèle | 60 |
 | `lr_sweep` | interaction globale et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 90 |
+| `tau_sweep` | interaction globale multiplicative et additive, α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 110 |
 | `quick_test` | test local sur CPU (2 époques, 500 images) | 8 |
 
 ### Balayage du learning rate (`lr_sweep`)

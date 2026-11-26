@@ -13,6 +13,7 @@ results/<campagne>/<dataset>/<arch>_<K>agents/<méthode>/<point>/, voir experime
     ├── config.json             réglages, tailles des modèles, environnement (commit Git, versions)
     ├── results.json            résumé sur les runs (médiane, quantiles 5 % / 95 %) et détail par run
     ├── test_probabilities/     probabilités de test de chaque run (.npy), pour les notebooks
+    ├── confidence_weights/     poids de confiance w_k par époque, au total et par classe (.npz, K agents)
     ├── tasks/<tâche>/          une tâche : result.json, test_probabilities.npy, history.csv, checkpoint/
     └── logs/                   journal de chaque processus
 
@@ -49,6 +50,8 @@ log = logging.getLogger("collaborative_learning")
 TASKS_DIR = "tasks"                          # un sous-dossier par tâche
 PROBA_DIR = "test_probabilities"             # probabilités de test rassemblées, une par run
 PROBA_FILE = "test_probabilities.npy"        # probabilités de test d'une tâche
+CONFIDENCE_DIR = "confidence_weights"        # poids de confiance w_k par époque et par classe, un .npz par run
+CONFIDENCE_FILE = "confidence_weights.npz"   # poids de confiance d'une tâche
 # anciens noms d'expériences (avant le 2026-11-14) : un dossier déplacé sous results/ reste lisible
 LEGACY_EXPERIMENT_NAMES = {"best_hyperparams": "hyperparameter_search"}
 

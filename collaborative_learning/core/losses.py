@@ -128,16 +128,37 @@ def leave_one_out(ctx, outputs, log_p, raw_log_p, y):
     return (1.0 - w_k) * ce_soft(loo, log_p)
 
 
+def _global_consensus(ctx, outputs, log_p, raw_log_p):
+    """Consensus y^cons = sum_k w_k y^k et son log (non borné), sans stop_gradient."""
+    log_w = log_confidence_weights(outputs, ctx.temperature, raw_log_p)
+    cons = simplicial_proba(outputs, tf.exp(log_w))
+    # log y^cons = logsumexp_k(log w_k + log y^k)
+    raw = log_p if raw_log_p is None else raw_log_p
+    return cons, tf.reduce_logsumexp(log_w[..., None] + raw, axis=1)
+
+
 @register_loss("global_interaction")
 def global_interaction(ctx, outputs, log_p, raw_log_p, y):
     """I_k = CE(y^cons, y^k) + CE(y, y^cons)"""
-    log_w = log_confidence_weights(outputs, ctx.temperature, raw_log_p)
-    cons = simplicial_proba(outputs, tf.exp(log_w))
-    # log y^cons = logsumexp_k(log w_k + log y^k), borné comme les autres CE
-    raw = log_p if raw_log_p is None else raw_log_p
-    log_cons = tf.maximum(tf.reduce_logsumexp(log_w[..., None] + raw, axis=1), LOG_EPS)
+    cons, log_cons = _global_consensus(ctx, outputs, log_p, raw_log_p)
+    log_cons = tf.maximum(log_cons, LOG_EPS)                           # borné comme les autres CE
     l_glob = ce_labels(y, log_cons[:, None, :], ctx.num_classes)   # (batch, 1)
     l_loc = ce_soft(cons, log_p)                                     # (batch, K)
+    return l_loc + l_glob
+
+
+@register_loss("global_interaction_kl")
+def global_interaction_kl(ctx, outputs, log_p, raw_log_p, y):
+    """
+    I_k = KL(y^cons || y^k) + CE(y, y^cons) : comme global_interaction, avec le terme local en KL
+    (consensus comme cible). KL = CE(y^cons, y^k) - H(y^cons) : vaut 0 quand l'agent est d'accord
+    avec le consensus. Le gradient passe aussi par y^cons (pas de stop_gradient), sans le terme
+    -grad H(y^cons) qui, dans global_interaction, pousse le consensus vers une faible entropie.
+    """
+    cons, log_cons = _global_consensus(ctx, outputs, log_p, raw_log_p)
+    entropy = -tf.reduce_sum(cons * log_cons, axis=-1)                # H(y^cons) (batch,)
+    l_glob = ce_labels(y, tf.maximum(log_cons, LOG_EPS)[:, None, :], ctx.num_classes)   # (batch, 1)
+    l_loc = ce_soft(cons, log_p) - entropy[:, None]                   # KL(y^cons || y^k) (batch, K)
     return l_loc + l_glob
 
 

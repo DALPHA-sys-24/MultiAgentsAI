@@ -26,6 +26,7 @@ from collaborative_learning.training.checkpoint import TrainingCheckpoint
 from collaborative_learning.data import make_eval_dataset, make_train_dataset
 from collaborative_learning.evaluation.metrics import evaluate_detailed
 from collaborative_learning.models import AgentNetwork
+from collaborative_learning.core.callbacks import ConfidenceWeightsCallback
 from collaborative_learning.core.multiagent import MultiAgentModel
 from collaborative_learning.training.optimizers import DEFAULT_WD_EXCLUDE, build_agent_optimizers
 
@@ -115,6 +116,9 @@ def run_multi_experiment(
     callbacks: Optional[list] = None,
     evaluate_test: bool = True,
     steps_per_execution: int = 1,
+    confidence_weights: bool = False,
+    confidence_on_train: bool = False,
+    confidence_file: Optional[str] = None,
     verbose: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -138,6 +142,11 @@ def run_multi_experiment(
         steps_per_execution: nombre de pas d'entraînement exécutés par appel au GPU. Mêmes
             calculs, moins d'aller-retours Python <-> GPU : nettement plus rapide pour les petits
             modèles. Les callbacks par batch ne sont appelés qu'une fois tous les N pas.
+        confidence_weights: True = poids de confiance w_k à chaque époque sur toute la validation,
+            au total et par classe (ConfidenceWeightsCallback, K >= 2 seulement) ; confidence_on_train
+            ajoute tout le train (sans augmentation, une passe d'inférence de plus par époque).
+            Clés val_w_agent<k>, val_w_max, val_w_on_correct (train_... pour le train) dans l'historique ;
+            détail par classe dans confidence_file (.npz).
         evaluate_test: False = ne touche pas au test (recherche d'hyperparamètres) ; renvoie
             alors seulement l'historique et les infos de validation.
         Les autres arguments sont ceux de MultiAgentModel.compile.
@@ -194,6 +203,12 @@ def run_multi_experiment(
     model(tf.zeros((1, num_agents) + image_shape if per_agent_views else (1,) + image_shape), training=False)
 
     callbacks = list(callbacks or [])
+    if confidence_weights and num_agents >= 2:
+        sets = {"val": (data["x_val"], data["y_val"])}
+        if confidence_on_train:
+            sets["train"] = (data["x_train"], data["y_train"])
+        # en premier : ajoute ses clés aux logs avant CSVLogger et le checkpoint
+        callbacks.insert(0, ConfidenceWeightsCallback(sets, data["num_classes"], path=confidence_file))
     ckpt, initial_epoch = None, 0
     if checkpoint_dir is not None:
         ckpt = TrainingCheckpoint(checkpoint_dir, monitor="val_accuracy", every=checkpoint_every)

@@ -1,0 +1,6 @@
+# Interaction globale avec terme local en KL, forme multiplicative L_k * (L_k + alpha * I_k),
+# I_k = KL(y^cons || y^k) + CE(y, y^cons). À mettre dans methods: d'une campagne.
+method: global_interaction_kl
+loss_type: global_interaction_kl
+loss_form: multiplicative
+strategy: simplicial

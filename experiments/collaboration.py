@@ -24,6 +24,9 @@ Exemples (depuis la racine du dépôt) :
     python -m experiments.collaboration --config configs/methods/dml.yaml --alphas 0 1
     python -m experiments.collaboration --cpu --train-subset 2000 --epochs 1 --alphas 1 --n-runs 1   # test rapide
 
+Poids de confiance w_k (confidence_weights: true, défaut) : à chaque époque, sur toute la validation
+(et le train si confidence_on_train), au total et par classe -> confidence_weights/<tâche>.npz.
+
 Sorties : results/collaboration/<dataset>/<arch>_<K>agents/<méthode>[_<tag>]/ (voir experiments/common.py).
 """
 import json
@@ -35,7 +38,7 @@ from collaborative_learning.evaluation.metrics import disagreement
 from collaborative_learning.evaluation.reporting import print_sweep_table, summary_by_alpha, write_json
 from collaborative_learning.training.runner import count_trainable_params, run_multi_experiment
 from collaborative_learning.utils.config import CollaborationConfig
-from experiments.common import PROBA_DIR, PROBA_FILE, TASKS_DIR, Experiment, Task, copy_atomic, log
+from experiments.common import CONFIDENCE_DIR, CONFIDENCE_FILE, PROBA_DIR, PROBA_FILE, TASKS_DIR, Experiment, Task, copy_atomic, log
 
 
 class Collaboration(Experiment):
@@ -62,7 +65,8 @@ class Collaboration(Experiment):
     def run_task(self, task, cfg, data, ctx, task_dir, verbose):
         seed = task.params["seed"]
         paths = dict(checkpoint_dir=os.path.join(task_dir, "checkpoint"),
-                     csv_log=os.path.join(task_dir, "history.csv"))
+                     csv_log=os.path.join(task_dir, "history.csv"),
+                     confidence_file=os.path.join(task_dir, CONFIDENCE_FILE))
         alpha = task.params["alpha"]
         setup = cfg.setup_for(alpha)          # alpha = 0 : independent (CE) + majority
         strategy = setup["strategy"]
@@ -73,6 +77,7 @@ class Collaboration(Experiment):
             data, archs=cfg.arch, num_agents=cfg.num_agents, seed=seed,
             loss_type=setup["loss_type"], strategy=strategy, alpha=alpha, temperature=cfg.temperature,
             per_agent_views=cfg.per_agent_views,
+            confidence_weights=cfg.confidence_weights, confidence_on_train=cfg.confidence_on_train,
             optimizer=cfg.optimizer, lr=cfg.lr, optimizer_kwargs=cfg.optimizer_kwargs,
             **paths, **train,
         )
@@ -106,6 +111,12 @@ class Collaboration(Experiment):
         os.makedirs(proba_dir, exist_ok=True)
         for task_id in tasks:     # alpha<a>_seed<s>.npy
             copy_atomic(os.path.join(run_dir, TASKS_DIR, task_id, PROBA_FILE), os.path.join(proba_dir, f"{task_id}.npy"))
+        weights = [t for t in tasks if os.path.exists(os.path.join(run_dir, TASKS_DIR, t, CONFIDENCE_FILE))]
+        if weights:               # poids de confiance par époque et par classe : confidence_weights/alpha<a>_seed<s>.npz
+            os.makedirs(os.path.join(run_dir, CONFIDENCE_DIR), exist_ok=True)
+            for task_id in weights:
+                copy_atomic(os.path.join(run_dir, TASKS_DIR, task_id, CONFIDENCE_FILE),
+                            os.path.join(run_dir, CONFIDENCE_DIR, f"{task_id}.npz"))
 
         drop = ("task", "task_time_s", "model")
         runs = sorted(({k: v for k, v in t.items() if k not in drop} for t in tasks.values() if "alpha" in t),

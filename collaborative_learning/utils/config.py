@@ -105,6 +105,10 @@ class BaseConfig:
                        choices=EVAL_ON)
     steps_per_execution: int = opt(8, "Pas d'entraînement par appel au GPU (plus rapide, mêmes calculs).")
     checkpoint_every: int = opt(1, "Sauvegarde de l'état de reprise toutes les N époques.")
+    confidence_weights: bool = opt(True, "Poids de confiance w_k à chaque époque sur toute la validation, au total "
+                                         "et par classe (K agents seulement ; sans effet sur l'entraînement).")
+    confidence_on_train: bool = opt(False, "Idem sur tout le train (sans augmentation) : une passe d'inférence "
+                                           "de plus par époque.")
     out_dir: str = opt("results", "Dossier racine des résultats.")
     tag: Optional[str] = opt(None, "Suffixe du dossier de run, pour séparer deux variantes "
                                    "(ex. adam -> results/<expérience>/<dataset>/<arch>_<K>agents_adam).", kind="str_or_none")
@@ -113,7 +117,8 @@ class BaseConfig:
     IGNORED_KEYS = ()                  # anciennes clés acceptées et ignorées (configs d'avant une refonte)
     # Réglages qui peuvent changer entre deux lancements dans le même dossier de run
     # (ajouter des runs, des alphas...) sans mélanger deux expériences différentes.
-    EXTENSIBLE = ("n_runs", "out_dir", "jit", "steps_per_execution", "checkpoint_every")
+    EXTENSIBLE = ("n_runs", "out_dir", "jit", "steps_per_execution", "checkpoint_every",
+                  "confidence_weights", "confidence_on_train")
 
     num_agents = 1                     # un seul modèle (redéfini par TrainConfig)
 

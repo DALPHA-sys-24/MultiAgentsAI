@@ -1,0 +1,23 @@
+# Effet de la température tau des poids de confiance w_k = softmax(-H_k / tau), à alpha fixé.
+#   tau petit : le consensus suit l'agent le plus confiant ; tau grand : w_k -> 1/K (moyenne simple).
+#   Figures : accuracy_vs_temperature, confidence_vs_temperature (poids w_k), confidence_*_curves (par époque),
+#   confidence/ (w_k de chaque agent par époque, et par classe x agent). Poids w_k par classe et par époque :
+#   confidence_weights/<tâche>.npz de chaque dossier (options confidence_weights / confidence_on_train de defaults.yaml).
+#   python -m experiments.campaign tau_sweep --list      # nombre de tâches et commande sbatch
+#   sbatch --array=0-<N-1> slurm/campaign.sh tau_sweep
+# La DML n'utilise pas tau dans sa loss (seulement dans le consensus au test) : l'ajouter à methods
+# montre l'effet de tau sur le seul consensus.
+experiment: collaboration
+datasets: [fashion_mnist, cifar10]
+methods: [global_interaction, global_interaction_additive]
+use_tuned_params: true
+settings:                            # mêmes réglages que alpha_sweep : le grand modèle est partagé
+  arch: resnet20
+  num_agents: 3
+  epochs: 50
+  n_runs: 5
+  # confidence_on_train: true        # w_k aussi sur tout le train (~ +20-30 % de temps)
+grid:
+  alpha: [10]
+  temperature: [0.1, 0.3, 1, 3, 10]
+reference: true

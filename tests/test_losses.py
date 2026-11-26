@@ -55,7 +55,8 @@ def test_additive_form_alpha0_is_ce():
     np.testing.assert_allclose([float(v) for v in model.compute_losses(out, y)], expected.numpy(), rtol=1e-5)
 
 
-@pytest.mark.parametrize("loss_type", ["leave_one_out", "global_interaction", "majority_hard"])
+@pytest.mark.parametrize("loss_type", ["leave_one_out", "global_interaction", "global_interaction_kl",
+                                       "majority_hard"])
 def test_gradient_matches_finite_difference(loss_type):
     """Gradient TensorFlow vs différence finie, par rapport aux logits."""
     rng = np.random.default_rng(1)
@@ -135,3 +136,30 @@ def test_independent_additive_is_plain_ce_for_each_agent(alpha):
     ce = tf.keras.losses.sparse_categorical_crossentropy(tf.tile(y[:, None], [1, 3]), out)
     np.testing.assert_allclose([float(v) for v in model.compute_losses(out, y)],
                                tf.reduce_mean(ce, axis=0).numpy(), rtol=1e-5)
+
+
+def test_global_interaction_kl_is_ce_minus_consensus_entropy():
+    """I_k(kl) = I_k(ce) - H(y^cons) : même consensus, seul le terme local change."""
+    rng = np.random.default_rng(3)
+    lo = tf.nn.log_softmax(tf.constant(rng.normal(size=(8, 3, 10)).astype("float32")), axis=-1)
+    p = tf.exp(lo)
+    y = tf.constant(rng.integers(0, 10, 8), tf.int32)
+    ctx = loss_lib.LossContext(num_agents=3, num_classes=10, temperature=0.7)
+    log_p = loss_lib.bounded_log_probs(p, lo)
+    i_ce = loss_lib.get_loss("global_interaction")(ctx, p, log_p, lo, y).numpy()
+    i_kl = loss_lib.get_loss("global_interaction_kl")(ctx, p, log_p, lo, y).numpy()
+    w = loss_lib.confidence_weights(p, 0.7, lo).numpy()
+    cons = np.einsum("bk,bkc->bc", w, p.numpy())
+    entropy = -np.sum(cons * np.log(cons), axis=-1)
+    np.testing.assert_allclose(i_kl, i_ce - entropy[:, None], rtol=1e-5, atol=1e-5)
+    l_glob = -np.log(cons[np.arange(8), y.numpy()])
+    kl = np.array([[_kl(cons[b], p.numpy()[b, k]) for k in range(3)] for b in range(8)])
+    np.testing.assert_allclose(i_kl, kl + l_glob[:, None], rtol=1e-4, atol=1e-5)
+    assert (kl >= -1e-6).all()
+
+
+def test_global_interaction_kl_trains_without_nan():
+    for form in ("multiplicative", "additive"):
+        model, x, y = make_model(k=3, loss_type="global_interaction_kl", alpha=10.0, form=form, jit_compile=False)
+        hist = model.fit(x, y, epochs=2, batch_size=8, verbose=0).history
+        assert all(np.isfinite(v) for v in hist["loss"])

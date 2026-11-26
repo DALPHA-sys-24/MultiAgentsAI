@@ -1,0 +1,6 @@
+# Interaction globale, forme additive : L_k + alpha * I_k, avec I_k = CE(y^cons, y^k) + CE(y, y^cons)
+# (alpha = 0 : cross-entropy seule). À mettre dans methods: d'une campagne, ex. alpha_sweep.
+method: global_interaction_additive
+loss_type: global_interaction
+loss_form: additive
+strategy: simplicial

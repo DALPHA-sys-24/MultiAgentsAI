@@ -3,11 +3,13 @@ Callbacks de suivi de l'entraînement multi-agents.
 
 - ConvergenceTracker : distance des poids de chaque agent à des poids de référence w*.
 - AgentHistoryCallback : historique des losses, accuracies, poids de confiance et entropies.
+- ConfidenceWeightsCallback : poids de confiance w_k à chaque époque, sur tout un ensemble
+  (validation, train), au total et par classe, enregistrés dans un fichier .npz.
 """
 import os
 import pickle
 import tempfile
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -535,3 +537,125 @@ class AgentHistoryCallback(tf.keras.callbacks.Callback):
                 print(f"  Agent {i+1}: {w0:.3f} → {w1:.3f} ({w1 - w0:+.3f})")
 
         print("=" * 60)
+
+
+class ConfidenceWeightsCallback(tf.keras.callbacks.Callback):
+    """
+    Poids de confiance w_k(x) = softmax(-H_k(x) / tau) à la fin de chaque époque, sur TOUTES les
+    images de chaque ensemble donné (sans augmentation, avec les poids de fin d'époque).
+
+    Moyennes exactes (image par image), regroupées selon la vraie classe y :
+        overall[époque, k]             moyenne de w_k sur l'ensemble
+        per_class[époque, c, k]        moyenne de w_k sur les images de classe c
+        w_max[époque]                  moyenne de max_k w_k (1/K : uniforme, 1 : un seul agent décide)
+        per_class_w_max[époque, c]     la même, par classe
+        w_on_correct[époque]           moyenne de sum_k w_k 1[agent k juste]
+        class_counts[c]                nombre d'images de classe c
+
+    Les clés <ensemble>_w_agent<k>, <ensemble>_w_max et <ensemble>_w_on_correct sont aussi ajoutées
+    aux logs Keras (donc à history.csv et à l'historique) : ce callback doit passer avant CSVLogger
+    et le checkpoint. Rien ne change dans l'entraînement (passe d'inférence à part).
+
+    Args:
+        datasets: {"val": (x, y), "train": (x, y)} (un ou plusieurs ensembles).
+        num_classes: nombre de classes.
+        path: fichier .npz réécrit à chaque époque (None = pas de fichier). S'il existe déjà
+            (reprise après interruption), les époques déjà calculées sont gardées.
+        batch_size: taille des batchs de la passe d'inférence.
+    """
+
+    def __init__(self, datasets: Dict[str, Tuple[np.ndarray, np.ndarray]], num_classes: int,
+                 path: Optional[str] = None, batch_size: int = 512):
+        super().__init__()
+        self.datasets = {name: xy for name, xy in datasets.items() if xy is not None and len(xy[0])}
+        self.num_classes = num_classes
+        self.path = path
+        self.batch_size = batch_size
+        self.records: Dict[int, Dict[str, np.ndarray]] = {}   # époque (1, 2, ...) -> valeurs
+        self.class_counts = {}
+        self._step = None
+
+    # --- calcul ----------------------------------------------------------------
+    def _batch_fn(self):
+        model = self.model
+
+        @tf.function
+        def step(x, y):
+            log_p = model.forward_log_probs(x, training=False)
+            p = tf.exp(log_p)
+            w = tf.cast(model.compute_confidence_weights(p, log_p), tf.float32)       # (batch, K)
+            preds = tf.argmax(p, axis=-1, output_type=tf.int32)                       # (batch, K)
+            y = tf.cast(tf.reshape(y, [-1]), tf.int32)
+            correct = tf.cast(tf.equal(preds, y[:, None]), tf.float32)
+            onehot = tf.one_hot(y, self.num_classes, dtype=tf.float32)                # (batch, C)
+            return (tf.matmul(onehot, w, transpose_a=True),                           # sommes par classe (C, K)
+                    tf.reduce_sum(onehot * tf.reduce_max(w, axis=-1)[:, None], 0),     # (C,)
+                    tf.reduce_sum(w * correct))
+        return step
+
+    def compute(self, x: np.ndarray, y: np.ndarray) -> Dict[str, np.ndarray]:
+        """Moyennes de w_k sur (x, y) avec les poids actuels du modèle."""
+        if self._step is None:
+            self._step = self._batch_fn()
+        k = self.model.num_agents
+        sums, max_sums, on_correct = np.zeros((self.num_classes, k)), np.zeros(self.num_classes), 0.0
+        ds = tf.data.Dataset.from_tensor_slices((x, y)).batch(self.batch_size).prefetch(tf.data.AUTOTUNE)
+        for xb, yb in ds:
+            s, m, c = self._step(xb, yb)
+            sums += s.numpy()
+            max_sums += m.numpy()
+            on_correct += float(c)
+        counts = np.bincount(np.asarray(y).reshape(-1).astype(int), minlength=self.num_classes)
+        n = max(int(counts.sum()), 1)
+        safe = np.maximum(counts, 1)
+        return {
+            "overall": sums.sum(0) / n,
+            "per_class": sums / safe[:, None],
+            "w_max": np.float64(max_sums.sum() / n),
+            "per_class_w_max": max_sums / safe,
+            "w_on_correct": np.float64(on_correct / n),
+            "class_counts": counts,
+        }
+
+    # --- Keras -----------------------------------------------------------------
+    def on_train_begin(self, logs=None):
+        if self.path and os.path.exists(self.path):     # reprise : époques déjà calculées
+            with np.load(self.path) as f:
+                saved = {key: f[key] for key in f.files}
+            for i, epoch in enumerate(saved.get("epochs", [])):
+                self.records[int(epoch)] = {
+                    key: saved[key][i] for key in saved
+                    if key not in ("epochs", "temperature") and not key.endswith("class_counts")}
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs if logs is not None else {}
+        record = {}
+        for name, (x, y) in self.datasets.items():
+            res = self.compute(x, y)
+            self.class_counts[name] = res.pop("class_counts")
+            for key, value in res.items():
+                record[f"{name}_{key}"] = value
+            for i, w in enumerate(res["overall"]):
+                logs[f"{name}_w_agent{i + 1}"] = float(w)
+            logs[f"{name}_w_max"] = float(res["w_max"])
+            logs[f"{name}_w_on_correct"] = float(res["w_on_correct"])
+        self.records[epoch + 1] = record
+        if self.path:
+            self.save(self.path)
+
+    def arrays(self) -> Dict[str, np.ndarray]:
+        epochs = sorted(self.records)
+        out = {"epochs": np.array(epochs, dtype=np.int32),
+               "temperature": np.float64(getattr(self.model, "_temperature", np.nan))}
+        if epochs:
+            for key in self.records[epochs[-1]]:
+                out[key] = np.stack([self.records[e][key] for e in epochs if key in self.records[e]])
+        for name, counts in self.class_counts.items():
+            out[f"{name}_class_counts"] = counts
+        return out
+
+    def save(self, path: str) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp.npz"
+        np.savez(tmp, **self.arrays())
+        os.replace(tmp, path)

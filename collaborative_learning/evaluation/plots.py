@@ -9,6 +9,10 @@ Pour chaque groupe (dataset, arch, K) d'une campagne, dans results/<campagne>/<d
     diversity_vs_<param>.png/.pdf    désaccord entre agents selon ce paramètre
     paired_difference.png/.pdf       écart d'accuracy avec le grand modèle, graine par graine
     learning_curves.png/.pdf         accuracy de validation par époque, un panneau par méthode
+    confidence_*                     poids de confiance w_k (si confidence_weights: true) : max_k w_k et poids sur
+                                     les agents justes par époque et selon chaque paramètre
+    confidence/<méthode>_<point>_weights_per_agent_<val|train>   w_k de chaque agent par époque, un panneau par graine
+    confidence/<méthode>_<point>_weights_per_class_<val|train>   w_k par classe x agent à la dernière époque, par graine
 
 Toutes les statistiques : médiane et bande des quantiles 5 % / 95 % sur les graines.
 
@@ -39,8 +43,18 @@ INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e0", "#ffffff"
 INDEPENDENT = "independent"
 METHOD_LABELS = {"global_interaction": "interaction globale", "dml": "DML", INDEPENDENT: "agents indépendants"}
 PARAM_LABELS = {"alpha": "alpha  (0 = agents indépendants, cross-entropy + vote majoritaire)",
-                "lr": "learning rate des agents (échelle log)"}
-LOG_PARAMS = ("lr", "weight_decay")
+                "lr": "learning rate des agents (échelle log)",
+                "temperature": "température τ des poids de confiance w_k = softmax(−H_k / τ)  (échelle log)"}
+LOG_PARAMS = ("lr", "weight_decay", "temperature")
+# Poids de confiance enregistrés à chaque époque (validation) : valeur de l'époque évaluée sur le test
+CONFIDENCE_KEYS = {"w_max": "val_w_max", "w_on_correct": "val_w_on_correct"}
+CONFIDENCE_DIR = "confidence_weights"      # <dossier du run>/confidence_weights/<tâche>.npz (experiments/common.py)
+CONFIDENCE_SETS = {"val": "validation", "train": "train"}
+CLASS_NAMES = {
+    "fashion_mnist": ["T-shirt", "pantalon", "pull", "robe", "manteau", "sandale", "chemise", "basket", "sac",
+                      "bottine"],
+    "cifar10": ["avion", "auto", "oiseau", "chat", "cerf", "chien", "grenouille", "cheval", "bateau", "camion"],
+}
 
 
 # =============================================================================
@@ -113,8 +127,20 @@ def rows_of(entry: dict) -> List[dict]:
     for r in entry["results"]["runs"]:
         row = dict(r)
         row.update({k: v for k, v in entry["point"].items() if k != "alpha"})
+        hist = r.get("history") or {}
+        epoch = (r.get("best_epoch") or 0) - 1 if r.get("evaluated_on") == "best" else -1
+        for name, key in CONFIDENCE_KEYS.items():
+            if hist.get(key):
+                row[name] = hist[key][epoch]
+        agent_acc = [hist[k][epoch] for k in sorted(hist) if k.startswith("val_accuracy_agent") and hist[k]]
+        if agent_acc and "w_on_correct" in row:
+            row["frac_correct"] = float(np.mean(agent_acc))     # part d'agents justes (= w_on_correct si w uniforme)
         out.append(row)
     return out
+
+
+def has_confidence(entries) -> bool:
+    return any("w_max" in row for e in entries for row in rows_of(e))
 
 
 def value_of(entry: dict, row: dict, param: str):
@@ -314,8 +340,11 @@ def _curve(ax, histories, color, label, ls="-", band=True):
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
 
-def plot_learning_curves(entries, reference, key="val_accuracy"):
-    """Un panneau par méthode, une courbe par point de la grille (bleu clair -> foncé), grand modèle en pointillés."""
+def plot_learning_curves(entries, reference, key="val_accuracy", ylabel=None, hline=None):
+    """
+    Un panneau par méthode, une courbe par point de la grille (bleu clair -> foncé), grand modèle en pointillés.
+    `key` : clé de l'historique (val_accuracy, val_w_max...) ; `hline` : (valeur en %, libellé) en tirets gris.
+    """
     import matplotlib.pyplot as plt
     methods = []
     for e in entries:
@@ -346,14 +375,152 @@ def plot_learning_curves(entries, reference, key="val_accuracy"):
             _curve(ax, hs, color, label)
         if ref_hist:
             _curve(ax, ref_hist, BIG_COLOR, "grand modèle seul", ls=":")
+        if hline:
+            ax.axhline(hline[0], color=MUTED, ls="--", lw=1, label=hline[1])
         ax.set_title(method_label(method), color=INK, loc="left", fontweight="bold")
         ax.set_xlabel("époque", color=INK)
         ax.legend(frameon=False, fontsize=8.5)
         _style(ax)
     for row in axes:
-        row[0].set_ylabel("accuracy de validation (%)" + (" — consensus" if key == "val_accuracy" else ""), color=INK)
+        row[0].set_ylabel(ylabel or ("accuracy de validation (%)" + (" — consensus" if key == "val_accuracy" else "")),
+                          color=INK)
     fig.tight_layout()
     return fig
+
+
+# =============================================================================
+# POIDS DE CONFIANCE PAR AGENT ET PAR CLASSE
+# =============================================================================
+
+def load_confidence(entry: dict) -> Dict[str, dict]:
+    """Poids de confiance de chaque run du dossier : {"alpha<a>_seed<s>": {clé: tableau}} (vide si absents)."""
+    folder = os.path.join(entry["dir"], CONFIDENCE_DIR)
+    out = {}
+    if not os.path.isdir(folder):
+        return out
+    for name in sorted(os.listdir(folder)):
+        if name.endswith(".npz"):
+            with np.load(os.path.join(folder, name)) as f:
+                out[name[:-4]] = {k: f[k] for k in f.files}
+    return out
+
+
+def _task_key(task_id: str):
+    alpha, _, seed = task_id.partition("_seed")
+    try:
+        return float(alpha.replace("alpha", "")), int(seed)
+    except ValueError:
+        return (np.inf, task_id)
+
+
+def _panel_title(task_id: str) -> str:
+    alpha, seed = _task_key(task_id)
+    return f"α = {fmt(alpha)}, graine {seed}" if isinstance(seed, int) else task_id
+
+
+def _panels(n: int, width: float, height: float, sharey=True):
+    import matplotlib.pyplot as plt
+    ncols = min(n, 5)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(width * ncols, height * nrows), squeeze=False, sharey=sharey)
+    for ax in axes.flat[n:]:
+        ax.set_visible(False)
+    return fig, axes
+
+
+def plot_agent_weights(entry: dict, which: str = "val", confidence: Optional[dict] = None):
+    """w_k de chaque agent par époque (moyenne sur tout l'ensemble), un panneau par run. None si pas de données."""
+    confidence = confidence if confidence is not None else load_confidence(entry)
+    runs = sorted((t for t, a in confidence.items() if f"{which}_overall" in a), key=_task_key)
+    if not runs:
+        return None
+    from matplotlib.ticker import MaxNLocator
+    fig, axes = _panels(len(runs), 4.4, 3.4)
+    for ax, task in zip(axes.flat, runs):
+        arr = confidence[task]
+        w = arr[f"{which}_overall"] * 100                      # (époques, K)
+        k = w.shape[1]
+        for i, color in enumerate(method_ramp(entry["method"], k)):
+            ax.plot(arr["epochs"], w[:, i], color=color, lw=1.8, label=f"agent {i + 1}")
+        ax.axhline(100 / k, color=MUTED, ls="--", lw=1, label=f"uniforme (1/K = {100 / k:.0f} %)")
+        ax.set_title(_panel_title(task), color=INK, loc="left", fontsize=10)
+        ax.set_xlabel("époque", color=INK)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        _style(ax)
+    for row in axes:
+        row[0].set_ylabel(f"poids moyen w_k ({CONFIDENCE_SETS.get(which, which)}, %)", color=INK)
+    axes.flat[0].legend(frameon=False, fontsize=8, loc="best")
+    fig.suptitle(f"{entry_name(entry)} — poids de confiance de chaque agent", color=INK, x=0.01, ha="left",
+                 fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
+def plot_class_weights(entry: dict, which: str = "val", epoch: int = -1, confidence: Optional[dict] = None):
+    """
+    w_k moyen par classe (lignes) et par agent (colonnes) à une époque (défaut : la dernière), un panneau par run.
+    Un agent qui se spécialise sur des classes y apparaît en foncé. None si pas de données.
+    """
+    import matplotlib.pyplot as plt
+    confidence = confidence if confidence is not None else load_confidence(entry)
+    runs = sorted((t for t, a in confidence.items() if f"{which}_per_class" in a), key=_task_key)
+    if not runs:
+        return None
+    mats = [confidence[t][f"{which}_per_class"][epoch] * 100 for t in runs]     # (C, K)
+    n_classes, k = mats[0].shape
+    names = CLASS_NAMES.get(entry["config"].get("dataset"), [])
+    names = names if len(names) == n_classes else [str(c) for c in range(n_classes)]
+    vmax = max(float(m.max()) for m in mats)
+    vmin = min(float(m.min()) for m in mats)
+    cmap = METHOD_CMAPS.get(entry["method"]) or OTHER_CMAPS[_other_index(entry["method"]) % len(OTHER_CMAPS)]
+    fig, axes = _panels(len(runs), 0.75 * k + 1.6, 0.32 * n_classes + 1.2)
+    im = None
+    for ax, task, m in zip(axes.flat, runs, mats):
+        im = ax.imshow(m, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+        if n_classes * k <= 400:
+            for c in range(n_classes):
+                for i in range(k):
+                    v = m[c, i]
+                    ax.text(i, c, f"{v:.0f}", ha="center", va="center", fontsize=7.5,
+                            color=SURFACE if v > vmin + 0.6 * (vmax - vmin) else INK)
+        ax.set_xticks(range(k), [f"agent {i + 1}" for i in range(k)], fontsize=8)
+        ax.set_yticks(range(n_classes), names, fontsize=8)
+        epochs = confidence[task]["epochs"]
+        ax.set_title(f"{_panel_title(task)} — époque {int(epochs[epoch])}", color=INK, loc="left", fontsize=9.5)
+        for side in ax.spines.values():
+            side.set_visible(False)
+    fig.suptitle(f"{entry_name(entry)} — poids w_k par classe ({CONFIDENCE_SETS.get(which, which)}, %, "
+                 f"uniforme = {100 / k:.0f})", color=INK, x=0.01, ha="left", fontweight="bold")
+    fig.tight_layout()
+    fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.8, label="w_k moyen (%)")
+    return fig
+
+
+def _confidence_slug(entry: dict) -> str:
+    point = os.path.basename(os.path.normpath(entry["dir"]))
+    return entry["method"] if point == entry["method"] else f"{entry['method']}_{point}"
+
+
+def plot_confidence_details(entries, out_dir: str, formats: Sequence[str] = ("png", "pdf")) -> Dict[str, List[str]]:
+    """Figures w_k par agent et par classe de chaque dossier, dans <out_dir>/confidence/."""
+    import matplotlib.pyplot as plt
+    out = {}
+    folder = os.path.join(out_dir, "confidence")
+    for e in entries:
+        confidence = load_confidence(e)
+        if not confidence:
+            continue
+        os.makedirs(folder, exist_ok=True)
+        slug = _confidence_slug(e)
+        sets = [s for s in CONFIDENCE_SETS if any(f"{s}_overall" in a for a in confidence.values())]
+        for which in sets:
+            for kind, fn in (("weights_per_agent", plot_agent_weights), ("weights_per_class", plot_class_weights)):
+                fig = fn(e, which, confidence=confidence)
+                if fig is not None:
+                    name = f"{slug}_{kind}_{which}"
+                    out[f"confidence/{name}"] = _save(fig, folder, name, formats)
+                    plt.close(fig)
+    return out
 
 
 # =============================================================================
@@ -442,6 +609,25 @@ def plot_entries(entries, reference, params: Sequence[str], out_dir: str, title:
     fig = plot_learning_curves(entries, reference)
     out["learning_curves"] = _save(fig, out_dir, "learning_curves", formats)
     plt.close(fig)
+    if has_confidence(entries):        # poids de confiance w_k (confidence_weights: true, runs depuis le 2026-11-19)
+        k = int(entries[0]["config"].get("num_agents", 0)) or 1
+        fig = plot_learning_curves(entries, None, key="val_w_max", hline=(100 / k, f"uniforme (1/K = {100 / k:.0f} %)"),
+                                   ylabel="poids du plus confiant, max_k w_k (%)")
+        out["confidence_max_curves"] = _save(fig, out_dir, "confidence_max_curves", formats)
+        plt.close(fig)
+        fig = plot_learning_curves(entries, None, key="val_w_on_correct",
+                                   ylabel="poids sur les agents justes, Σ w_k 1[juste] (%)")
+        out["confidence_correct_curves"] = _save(fig, out_dir, "confidence_correct_curves", formats)
+        plt.close(fig)
+        for param in params:
+            others = [p for p in params if p != param]
+            fig = plot_vs_param(entries, reference, param, ["w_max", "w_on_correct", "frac_correct"],
+                                [f"Poids du plus confiant — {title}", "Poids sur les agents justes",
+                                 "Part d'agents justes (référence : w uniforme)"],
+                                "validation, époque évaluée (%)", other_params=others, show_reference=False)
+            out[f"confidence_vs_{param}"] = _save(fig, out_dir, f"confidence_vs_{param}", formats)
+            plt.close(fig)
+    out.update(plot_confidence_details(entries, out_dir, formats))
     log.info("[figures] %s -> %s", title, os.path.abspath(out_dir))
     for name, paths in out.items():
         log.info("  %-22s %s", name, ", ".join(os.path.basename(x) for x in paths))

@@ -70,7 +70,7 @@ configs/
 ├── collaboration.yaml         K agents      (defaults + cifar10 + global_interaction)
 ├── reference.yaml             grand modèle  (defaults + cifar10)
 ├── hyperparameter_search.yaml espace de recherche Optuna
-└── campaigns/                 alpha_sweep, lr_sweep, hyperparameter_search, quick_test
+└── campaigns/                 alpha_sweep, lr_sweep, tau_sweep, hyperparameter_search, quick_test
 ```
 
 Un fichier peut reprendre d'autres fichiers avec `defaults: [defaults, methods/dml]` ; la dernière valeur lue gagne. Pour un point de campagne, l'ordre est : `collaboration.yaml` < dataset < méthode < paramètres de la recherche < `settings` < valeurs de la grille. Une nouvelle méthode = un fichier dans `configs/methods/`.
@@ -103,6 +103,7 @@ results/
 │   │   ├── config.json             réglages et environnement (commit Git, versions)
 │   │   ├── results.json            résumé (médiane, q05, q95) et détail par graine
 │   │   ├── test_probabilities/     probabilités de test de chaque run (.npy)
+│   │   ├── confidence_weights/     poids de confiance w_k par époque, au total et par classe (.npz)
 │   │   └── tasks/<tâche>/          une tâche : résultat, historique, checkpoint
 │   └── figures/                    figures (.png, .pdf) et summary.csv de la campagne
 ├── reference/<dataset>/<arch>_x<K>params_<optimiseur>_lr<lr>[_tuned]/   grand modèle, partagé entre campagnes
@@ -122,6 +123,7 @@ Figures (médiane et bande q05–q95 sur les graines), refaites à chaque fusion
 | `diversity_vs_<param>` | désaccord entre agents |
 | `paired_difference` | écart d'accuracy graine par graine avec le grand modèle (sinon avec les agents indépendants) |
 | `learning_curves` | accuracy de validation par époque, un panneau par méthode |
+| `confidence_*` | poids de confiance w_k : par époque, selon τ, par agent et par classe (`confidence_weights: true`, voir docs/GUIDE.md) |
 
 ## Cluster SLURM
 
