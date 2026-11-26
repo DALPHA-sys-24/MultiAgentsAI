@@ -80,3 +80,20 @@ def test_search_is_on_one_model():
     assert cfg.run_name() == "hyperparameter_search/fashion_mnist/resnet20"
     with pytest.raises(SystemExit, match="alpha"):
         load_config(HyperparamSearchConfig, overrides={"search_space": {"alpha": {"type": "float", "low": 0, "high": 1}}})
+
+
+def test_finished_search_is_not_redone(tmp_path, tiny_data, monkeypatch):
+    """Relancer un worker : l'étude est complétée jusqu'à n_workers x n_trials essais, pas au-delà."""
+    from experiments import common
+    from experiments.hyperparameter_search import HyperparameterSearch
+    monkeypatch.setattr(common, "load_dataset", lambda *a, **k: dict(tiny_data))
+    cfg = load_config(HyperparamSearchConfig, overrides={
+        "arch": TINY["archs"], "epochs": 1, "batch_size": 16, "warmup_epochs": 0, "augment": False, "jit": False,
+        "pruner": "none", "n_workers": 1, "n_trials": 2,
+        "search_space": {"lr": {"type": "float", "low": 1e-3, "high": 1e-1, "log": True}}})
+    search = HyperparameterSearch()
+    run_dir = str(tmp_path / "search")
+    for _ in range(2):                                      # 2e lancement : budget atteint, rien de plus
+        search.execute(cfg, run_dir, task_index=0, cpu=True, verbose=0)
+    assert len(search.study(cfg, run_dir, 0).trials) == 2
+    assert (tmp_path / "search" / "tuned_params.yaml").exists()

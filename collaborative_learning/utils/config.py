@@ -100,7 +100,8 @@ class BaseConfig:
     optimizer: Union[str, List[str]] = opt("sgd", "Un nom pour tous les agents, ou un par agent.",
                                            choices=available_optimizers(), kind="per_agent")
     lr: Union[float, List[float]] = opt(0.1, "Un lr pour tous les agents, ou un par agent.", kind="per_agent")
-    weight_decay: float = opt(5e-4, "Weight decay (porté par l'optimiseur).")
+    weight_decay: Union[float, List[float]] = opt(5e-4, "Weight decay (porté par l'optimiseur), un pour tous les "
+                                                        "agents ou un par agent.", kind="per_agent")
     wd_exclude_norm_bias: bool = opt(True, "Pas de weight decay sur BatchNorm et biais (false = ancien comportement).")
     optimizer_kwargs: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = opt(
         None, "Arguments en plus de l'optimiseur (JSON), ex. {\"global_clipnorm\": 1.0}.", kind="json")
@@ -312,7 +313,7 @@ class ReferenceConfig(BaseConfig):
 
     def _extra_checks(self) -> List[str]:
         errors = []
-        for key in ("optimizer", "lr", "optimizer_kwargs"):
+        for key in ("optimizer", "lr", "weight_decay", "optimizer_kwargs"):
             if isinstance(getattr(self, key), list):
                 errors.append(f"'{key}' : une seule valeur pour le grand modèle")
         return errors

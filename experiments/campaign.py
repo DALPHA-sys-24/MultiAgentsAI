@@ -60,6 +60,9 @@ GROUP_KEYS = ("dataset", "arch", "num_agents")   # déjà dans le chemin, pas da
 TUNED_FILE, LEGACY_TUNED_FILE = "tuned_params.yaml", "tuned_collaboration.json"
 TUNED_KEYS = ("batch_size", "optimizer", "lr", "weight_decay", "wd_exclude_norm_bias", "optimizer_kwargs",
               "warmup_epochs", "augment", "val_size", "precision")
+# Agents hétérogènes : réglages propres à chaque agent (ceux de son architecture) ; les autres réglages
+# (batch, warmup, augmentation...) sont communs : ceux de l'architecture du premier agent.
+PER_AGENT_TUNED_KEYS = ("optimizer", "lr", "weight_decay", "optimizer_kwargs")
 
 
 @dataclass
@@ -135,10 +138,7 @@ class Campaign:
         self._runs: Optional[List[Run]] = None
 
     # --- configs -------------------------------------------------------------
-    def tuned_values(self, dataset: str, arch: str, out_dir: str) -> Tuple[Dict[str, Any], Optional[str]]:
-        """Paramètres de la recherche d'hyperparamètres du dataset (ou {} s'il n'y en a pas)."""
-        if not self.use_tuned or is_heterogeneous(arch):   # agents hétérogènes : réglages des configs / settings
-            return {}, None
+    def _tuned_file(self, dataset: str, arch: str, out_dir: str) -> Tuple[Dict[str, Any], Optional[str]]:
         folder = os.path.join(out_dir, "hyperparameter_search", dataset, arch)
         for name in (TUNED_FILE, LEGACY_TUNED_FILE):
             path = os.path.join(folder, name)
@@ -146,6 +146,29 @@ class Campaign:
                 values = read_raw(path)
                 return {k: v for k, v in values.items() if k in TUNED_KEYS}, path
         return {}, None
+
+    def tuned_values(self, dataset: str, arch: str, out_dir: str) -> Tuple[Dict[str, Any], Optional[str]]:
+        """
+        Paramètres de la recherche d'hyperparamètres du dataset (ou {} s'il n'y en a pas).
+        Agents hétérogènes (a+b) : chaque agent prend l'optimiseur, le lr et le weight decay de SA recherche
+        (listes, un élément par agent) ; il faut une recherche pour chaque architecture, sinon {}.
+        """
+        if not self.use_tuned:
+            return {}, None
+        archs = agent_archs(arch)
+        if len(archs) == 1:
+            return self._tuned_file(dataset, archs[0], out_dir)
+        found = [self._tuned_file(dataset, a, out_dir) for a in archs]
+        if any(path is None for _, path in found):
+            missing = [a for a, (_, path) in zip(archs, found) if path is None]
+            log.info("[%s] pas de recherche pour %s : réglages des configs pour %s", dataset, ", ".join(missing), arch)
+            return {}, None
+        values = {k: v for k, v in found[0][0].items() if k not in PER_AGENT_TUNED_KEYS}   # communs : agent 1
+        for key in PER_AGENT_TUNED_KEYS:
+            if all(key in t for t, _ in found):
+                per_agent = [t[key] for t, _ in found]
+                values[key] = per_agent if any(v != per_agent[0] for v in per_agent) else per_agent[0]
+        return values, " ; ".join(path for _, path in found)
 
     def _values(self, base: str, dataset: str, method: Optional[str] = None,
                 arch: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -175,9 +198,20 @@ class Campaign:
         seen = set()
         for dataset in self.datasets:
             if self.experiment == "hyperparameter_search":
-                values, _ = self._values("hyperparameter_search", dataset)
-                cfg = config_from_dict(HyperparamSearchConfig, values).validate()
-                runs.append(Run("hyperparameter_search", dataset, cfg, cfg.run_dir()))
+                # une recherche par architecture : grid: {arch: [resnet20, resnet32, ...]} (ou settings: arch)
+                other = [k for k in self.grid if k != "arch"]
+                if other:
+                    raise SystemExit(f"{self.path} : seule la clé arch peut être balayée dans une recherche "
+                                     f"(reçu : {other})")
+                for arch in self.grid.get("arch") or [None]:
+                    values, _ = self._values("hyperparameter_search", dataset)
+                    if arch is not None:
+                        values["arch"] = arch
+                    if is_heterogeneous(values.get("arch", "")):
+                        raise SystemExit(f"{self.path} : une recherche porte sur une seule architecture "
+                                         f"(reçu {values['arch']}) ; les paires prennent celles de chaque agent")
+                    cfg = config_from_dict(HyperparamSearchConfig, values).validate()
+                    runs.append(Run("hyperparameter_search", dataset, cfg, cfg.run_dir()))
                 continue
             references = {}
             for method in self.methods:
@@ -232,11 +266,15 @@ class Campaign:
             lines.append(f"  [{start:3d}-{start + run.n_tasks - 1:3d}] {run.experiment:22s}{extra:30s} "
                          f"{os.path.relpath(run.run_dir)}")
             start += run.n_tasks
-        for dataset in self.datasets:
-            arch = self.settings.get("arch", "resnet20")
-            _, tuned_path = self.tuned_values(dataset, arch, self.settings.get("out_dir", "results"))
-            if self.use_tuned:
-                lines.append(f"  paramètres {dataset} : " + (tuned_path or "pas de recherche -> valeurs des configs"))
+        if self.use_tuned and self.experiment == "collaboration":
+            archs = self.grid.get("arch") or [self.settings.get("arch", "resnet20")]
+            out_dir = self.settings.get("out_dir", "results")
+            for dataset in self.datasets:
+                for arch in archs:
+                    arch = ARCH_SEP.join(agent_archs(arch))
+                    _, tuned_path = self.tuned_values(dataset, arch, out_dir)
+                    lines.append(f"  paramètres {dataset} {arch} : "
+                                 + (tuned_path or "pas de recherche -> valeurs des configs"))
         lines.append(f"TASKS {len(tasks)}")
         lines.append(f"Cluster : sbatch --array=0-{len(tasks) - 1} slurm/campaign.sh {self.name}")
         return "\n".join(lines)

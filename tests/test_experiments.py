@@ -188,3 +188,38 @@ def test_heterogeneous_campaign_runs_and_reports_each_agent(tmp_path, fake_data)
     figures = tmp_path / "results" / "essai" / "fashion_mnist" / "resnet20+mobilenetv2_2agents" / "figures"
     header = open(figures / "summary.csv").readline()
     assert "agent1_resnet20_median" in header and "agent2_mobilenetv2_median" in header
+
+
+def test_search_campaign_over_architectures(tmp_path):
+    import yaml
+    from experiments.campaign import Campaign
+    spec = {"experiment": "hyperparameter_search", "datasets": ["fashion_mnist", "cifar10"],
+            "settings": {"n_workers": 2, "out_dir": str(tmp_path / "results")},
+            "grid": {"arch": ["resnet20", "resnet32"]}}
+    path = tmp_path / "search.yaml"
+    path.write_text(yaml.safe_dump(spec))
+    runs = Campaign(str(path)).runs()
+    names = [os.path.relpath(r.run_dir, tmp_path / "results").replace("\\", "/") for r in runs]
+    assert names == ["hyperparameter_search/fashion_mnist/resnet20", "hyperparameter_search/fashion_mnist/resnet32",
+                     "hyperparameter_search/cifar10/resnet20", "hyperparameter_search/cifar10/resnet32"]
+    assert len(Campaign(str(path)).tasks()) == 4 * 2
+    spec["grid"] = {"lr": [0.1]}
+    path.write_text(yaml.safe_dump(spec))
+    with pytest.raises(SystemExit, match="arch"):
+        Campaign(str(path)).runs()
+
+
+def test_heterogeneous_agents_take_tuned_params_of_their_architecture(tmp_path):
+    from experiments.campaign import Campaign
+    for arch, text in (("resnet20", "lr: 0.004\noptimizer: adamw\nweight_decay: 0.0001\nval_size: 3000\n"),
+                       ("resnet32", "lr: 0.02\noptimizer: sgd\nweight_decay: 0.0005\nval_size: 4000\n")):
+        folder = tmp_path / "results" / "hyperparameter_search" / "fashion_mnist" / arch
+        folder.mkdir(parents=True)
+        (folder / "tuned_params.yaml").write_text(text)
+    path = write_campaign(tmp_path, {"arch": ["resnet20+resnet32", "resnet20+mobilenetv2"], "alpha": [1]})
+    open(path, "a").write("use_tuned_params: true\n")
+    runs = {r.cfg.arch: r.cfg for r in Campaign(path).runs()}
+    cfg = runs["resnet20+resnet32"]
+    assert (cfg.lr, cfg.optimizer, cfg.weight_decay) == ([0.004, 0.02], ["adamw", "sgd"], [0.0001, 0.0005])
+    assert cfg.val_size == 3000                                  # réglage commun : celui du premier agent
+    assert runs["resnet20+mobilenetv2"].lr == 0.01               # pas de recherche pour mobilenetv2 : configs

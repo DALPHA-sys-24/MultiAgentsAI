@@ -11,8 +11,8 @@ batch...), repris automatiquement par les campagnes qui ont « use_tuned_params:
     python -m experiments.collaboration --config results/hyperparameter_search/<dataset>/<arch>/tuned_params.yaml
 
 Une tâche = un worker qui lance `n_trials` essais. Les `n_workers` workers partagent la même
-étude (study.journal) : sur le cluster, ils tournent en parallèle dans un job array, et
-chaque relance ajoute des essais à la recherche existante.
+étude (study.journal) : sur le cluster, ils tournent en parallèle dans un job array. Une relance
+complète l'étude jusqu'à n_workers x n_trials essais terminés (une recherche finie n'est pas refaite).
 
 Exemples (depuis la racine du dépôt) :
     python -m experiments.hyperparameter_search                        # configs/hyperparameter_search.yaml
@@ -100,7 +100,7 @@ class HyperparameterSearch(Experiment):
         return [Task(f"worker{i}", {"worker": i}) for i in range(cfg.n_workers)]
 
     def is_done(self, task_dir):
-        return False   # un worker relancé ajoute des essais à l'étude
+        return False   # décidé dans run_task : un worker relancé complète l'étude jusqu'au budget n_workers x n_trials
 
     def prepare(self, cfg, data):
         params = count_trainable_params(cfg.arch, data["input_shape"], data["num_classes"])
@@ -118,14 +118,25 @@ class HyperparameterSearch(Experiment):
         trials_dir = os.path.join(run_dir, "trials")
         os.makedirs(trials_dir, exist_ok=True)
         # chaque worker a sa propre graine de sampler, sinon ils proposeraient les mêmes essais
+        import optuna
         study = self.study(cfg, run_dir, cfg.study_seed + task.params["worker"])
+        # budget de l'étude : n_workers x n_trials essais terminés (une recherche finie n'est pas refaite ;
+        # pour ajouter des essais, augmenter n_trials ou n_workers)
+        budget = cfg.n_workers * cfg.n_trials
+        finished = (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
+        n_done = len(study.get_trials(deepcopy=False, states=finished))
+        if n_done >= budget:
+            log.info("[recherche] %d essais déjà terminés (budget %d = n_workers x n_trials) : rien à faire",
+                     n_done, budget)
+            return None
         if study.trials:
-            log.info("[reprise] %d essai(s) déjà dans l'étude", len(study.trials))
+            log.info("[reprise] %d essai(s) déjà dans l'étude, %d terminés sur %d", len(study.trials), n_done, budget)
         study.optimize(
             make_objective(data, cfg, trials_dir, verbose),
-            n_trials=cfg.n_trials,
+            n_trials=min(cfg.n_trials, budget - n_done),
             timeout=cfg.timeout_hours * 3600 if cfg.timeout_hours else None,
-            callbacks=[lambda s, t: self._merge(cfg, run_dir)],   # résultats à jour après chaque essai
+            callbacks=[optuna.study.MaxTrialsCallback(budget, states=finished),   # budget atteint : arrêt
+                       lambda s, t: self._merge(cfg, run_dir)],   # résultats à jour après chaque essai
             catch=(tf.errors.ResourceExhaustedError,),            # manque de mémoire GPU : essai FAIL, on continue
         )
         return None    # rien dans tasks/ : tout est dans l'étude

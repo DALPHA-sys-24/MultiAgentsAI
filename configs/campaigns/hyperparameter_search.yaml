@@ -1,9 +1,15 @@
-# Recherche d'hyperparamètres (Optuna) d'UN resnet20 sur chaque dataset ; une tâche = un worker.
+# Recherche d'hyperparamètres (Optuna) d'UN modèle, pour chaque dataset et chaque architecture ;
+# une tâche = un worker (n_workers tâches par (dataset, architecture)).
+#   Résultats : results/hyperparameter_search/<dataset>/<arch>/tuned_params.yaml, repris par les campagnes
+#   avec use_tuned_params: true ; pour des agents hétérogènes (a+b), chaque agent prend ceux de son architecture.
 #   python -m experiments.campaign hyperparameter_search --list
 #   sbatch --array=0-<N-1> slurm/campaign.sh hyperparameter_search
+# Relancer après avoir ajouté une architecture ou un dataset : seules les nouvelles recherches tournent (une recherche
+# qui a déjà n_workers x n_trials essais terminés est sautée) ; augmenter n_trials pour ajouter des essais partout.
 experiment: hyperparameter_search
 datasets: [fashion_mnist, cifar10, cifar100]
 settings:
-  arch: resnet20
   n_workers: 8
-  n_trials: 10                # par worker : 8 x 10 = 80 essais par dataset
+  n_trials: 10                # par worker : 8 x 10 = 80 essais par (dataset, architecture)
+grid:
+  arch: [resnet20, resnet32, resnet56, mobilenetv2]

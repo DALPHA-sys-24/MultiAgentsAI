@@ -256,8 +256,9 @@ les figures par agent et par classe ont donc un panneau par graine. Seul K ≥ 2
 ignoré). Dossier : `<campagne>/<dataset>/resnet32+mobilenetv2_2agents/<méthode>/<point>/`. Dans une campagne, mettre
 plusieurs paires dans la grille : `grid: {arch: [resnet32+mobilenetv2, resnet56+resnet20, resnet32]}`. α = 0 donne les
 mêmes architectures entraînées seules, la référence naturelle (comme dans DML). Pas de grand modèle pour une paire
-hétérogène ; les paramètres de la recherche (`tuned_params`) ne servent pas non plus : lr et optimiseur viennent des
-configs et de `settings` (un lr par agent possible : `lr: [0.01, 0.005]`). `summary.csv` donne l'accuracy de chaque
+hétérogène. Avec `use_tuned_params: true`, chaque agent prend l'optimiseur, le lr et le weight decay de la recherche de
+SON architecture (il faut une recherche par architecture, sinon ce sont les valeurs des configs) ; à la main :
+`lr: [0.01, 0.005]`, `weight_decay: [5e-4, 1e-4]`. `summary.csv` donne l'accuracy de chaque
 agent (`agent1_resnet32_median`, `agent2_mobilenetv2_median`...). Campagne : `heterogeneous`.
 
 ```bash
@@ -495,7 +496,9 @@ Les autres réglages (jeu de données, `arch`, `epochs` par essai...) sont fixé
 - `trials.csv` : tous les essais, avec leur état (terminé, arrêté tôt, échoué) ;
 - `tuned_params.yaml` : les meilleurs réglages d'entraînement (optimiseur, lr, weight decay, batch...), repris par les campagnes avec `use_tuned_params: true` ; K, epochs, la loss et alpha restent ceux de la campagne. Le grand modèle de ces campagnes est marqué `_tuned`. À la main : `python -m experiments.collaboration --config results/hyperparameter_search/cifar10/resnet20/tuned_params.yaml --num-agents 3`.
 
-Relancer la même commande ajoute des essais à la recherche existante.
+Relancer complète la recherche jusqu'à n_workers × n_trials essais terminés : une recherche finie n'est pas refaite (augmenter n_trials pour ajouter des essais).
+
+Toutes les architectures d'un coup : `grid: {arch: [resnet20, resnet32, resnet56, mobilenetv2]}` dans la campagne `hyperparameter_search` (une recherche par dataset et par architecture). Les agents hétérogènes (`arch: resnet32+mobilenetv2`) prennent chacun l'optimiseur, le lr et le weight decay de la recherche de leur architecture ; les réglages communs (batch, warmup...) viennent de celle du premier agent.
 
 ### Sur le cluster
 
@@ -518,11 +521,11 @@ Campagnes fournies :
 
 | Campagne | Contenu | Tâches |
 |---|---|---|
-| `hyperparameter_search` | Optuna sur un ResNet-20, Fashion-MNIST et CIFAR-10, 8 workers | 16 |
 | `alpha_sweep` | 4 variantes de l'interaction globale et DML, α ∈ {0, 1, 10, 100}, K = 3, 5 graines, 50 époques, grand modèle | 170 |
 | `lr_sweep` | 4 variantes de l'interaction globale et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 210 |
 | `tau_sweep` | 4 variantes de l'interaction globale, α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 210 |
 | `k_sweep` | K ∈ {2, 3, 5, 8}, 5 méthodes, α ∈ {0, 1}, cifar10 et cifar100, 50 époques, un grand modèle par K | 280 |
+| `hyperparameter_search` | resnet20, resnet32, resnet56, mobilenetv2 sur fashion_mnist, cifar10, cifar100, 8 workers × 10 essais | 96 |
 | `heterogeneous` | agents hétérogènes sur cifar100 : resnet32+mobilenetv2, resnet56+resnet20 et 2 × resnet32 (contrôle), 5 méthodes, α ∈ {0, 1}, 200 époques | 90 |
 | `quick_test` | test local sur CPU (2 époques, 500 images) | 8 |
 

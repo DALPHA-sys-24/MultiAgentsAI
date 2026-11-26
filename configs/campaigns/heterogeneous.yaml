@@ -6,12 +6,14 @@
 #   python -m experiments.campaign heterogeneous --list
 #   sbatch --array=0-<N-1> slurm/campaign.sh heterogeneous
 # resnet32 seul (num_agents: 2) : paire homogène de contrôle.
-# Les paramètres de la recherche (tuned_params) ne servent pas pour une paire hétérogène : lr, optimiseur...
-# sont ceux des configs (defaults.yaml) et de settings ; un lr par agent est possible : lr: [0.01, 0.005].
+# Paramètres réglés (use_tuned_params) : chaque agent prend l'optimiseur, le lr et le weight decay de la recherche
+# de SON architecture (results/hyperparameter_search/<dataset>/<arch>/) ; les réglages communs (batch, warmup...)
+# viennent de l'architecture du premier agent. Il faut une recherche pour chaque architecture de la paire
+# (campagne hyperparameter_search), sinon ce sont les valeurs des configs. À la main : lr: [0.01, 0.005].
 experiment: collaboration
 datasets: [cifar100]
 methods: [global_interaction, dml, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive]
-use_tuned_params: false            # même réglages pour les paires et le contrôle
+use_tuned_params: true
 settings:
   num_agents: 2                     # pour les architectures seules (ici resnet32) ; ignoré pour a+b
   epochs: 200
