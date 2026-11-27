@@ -4,6 +4,40 @@ Référence complète du code. Pour démarrer, voir le [README](../README.md).
 
 Apprentissage collaboratif de K agents (ResNet, MobileNet) avec des losses multi-agents, comparé à des agents indépendants, à la DML (Zhang et al., 2018) et à un grand modèle seul au même nombre de paramètres. TensorFlow / Keras, testé sous TF 2.15 (Keras 2, modules du cluster) et TF 2.21 (Keras 3).
 
+## Méthode
+
+Chaque agent k a sa cross-entropy L_k = CE(y, y^k) et un terme d'interaction I_k qui dépend des prédictions des autres agents :
+
+| Forme | Loss de l'agent k |
+|---|---|
+| multiplicative (défaut) | L_k · (L_k + α · I_k) |
+| additive | L_k + α · I_k |
+
+| Méthode (`configs/methods/`) | Forme | I_k |
+|---|---|---|
+| `global_interaction` | multiplicative | CE(y^cons, y^k) + CE(y, y^cons) |
+| `global_interaction_additive` | additive | CE(y^cons, y^k) + CE(y, y^cons) |
+| `global_interaction_kl` | multiplicative | KL(y^cons ‖ y^k) + CE(y, y^cons) |
+| `global_interaction_kl_additive` | additive | KL(y^cons ‖ y^k) + CE(y, y^cons) |
+| `dml` | additive | moyenne des KL(y^j ‖ y^k), j ≠ k (Zhang et al., 2018) |
+| `independent` | additive | 0 : utilisée automatiquement pour α = 0 (cross-entropy seule, vote majoritaire) |
+
+y^cons = Σ_k w_k y^k avec w = softmax(−H/τ) (stratégie `simplicial`). Autres interactions (`loss_type`) : `leave_one_out`,
+`majority_loo`, `majority_hard`, `vote_random` ; autres consensus (`strategy`) : `majority`, `vote`, `k_fold`.
+Résultats sur plusieurs graines en médiane [quantile 5 % ; quantile 95 %].
+
+| Commande | Rôle |
+|---|---|
+| `python -m experiments.campaign <campagne>` | lance (`--task I`), fusionne (`--merge`) et trace une campagne entière (`--list` : tâches) |
+| `python -m experiments.collaboration` | K agents pour chaque α de `--alphas` (sans campagne) |
+| `python -m experiments.reference` | grand modèle seul, autant de paramètres que les K agents réunis |
+| `python -m experiments.hyperparameter_search` | meilleurs hyperparamètres d'**un** modèle (Optuna) → `tuned_params.yaml` |
+| `python -m experiments.plot_results <campagne>` | figures et `summary.csv`, sans Jupyter |
+
+Ordre de lecture des configs pour un point de campagne (la dernière valeur gagne) : `collaboration.yaml` < `datasets/<dataset>.yaml`
+< `methods/<méthode>.yaml` < `tuned_params.yaml` (si `use_tuned_params`) < `settings` < valeurs de la grille.
+`--set clé=valeur` remplace un réglage sans toucher au fichier.
+
 ## Organisation du code
 
 ```
