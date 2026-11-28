@@ -1,0 +1,5 @@
+# Interaction locale, forme additive : I_k = CE(y^cons, y^k) (global_interaction sans L_glob = CE(y, y^cons)).
+method: local_interaction_additive
+loss_type: local_interaction
+loss_form: additive
+strategy: simplicial

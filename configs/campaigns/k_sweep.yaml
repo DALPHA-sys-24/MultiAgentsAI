@@ -8,7 +8,7 @@
 # cifar100 : lancer d'abord la recherche d'hyperparamètres (campagne hyperparameter_search) pour avoir le bon lr.
 experiment: collaboration
 datasets: [cifar10, cifar100]
-methods: [global_interaction, dml, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive]
+methods: [global_interaction, dml, global_interaction_additive, global_interaction_kl, global_interaction_kl_additive, local_interaction, local_interaction_additive]
 use_tuned_params: true
 settings:
   arch: resnet20

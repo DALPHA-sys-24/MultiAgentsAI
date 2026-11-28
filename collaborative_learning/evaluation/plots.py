@@ -50,7 +50,8 @@ INDEPENDENT = "independent"
 METHOD_LABELS = {"global_interaction": "interaction globale", "dml": "DML", INDEPENDENT: "agents indépendants",
                  "global_interaction_additive": "interaction globale (additive)",
                  "global_interaction_kl": "interaction globale KL",
-                 "global_interaction_kl_additive": "interaction globale KL (additive)"}
+                 "global_interaction_kl_additive": "interaction globale KL (additive)",
+                 "local_interaction": "interaction locale", "local_interaction_additive": "interaction locale (additive)"}
 PARAM_LABELS = {"alpha": "alpha  (0 = agents indépendants, cross-entropy + vote majoritaire)",
                 "lr": "learning rate des agents (échelle log)",
                 "temperature": "température τ des poids de confiance w_k = softmax(−H_k / τ)  (échelle log)"}

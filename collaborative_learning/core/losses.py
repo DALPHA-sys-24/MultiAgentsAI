@@ -147,6 +147,13 @@ def global_interaction(ctx, outputs, log_p, raw_log_p, y):
     return l_loc + l_glob
 
 
+@register_loss("local_interaction")
+def local_interaction(ctx, outputs, log_p, raw_log_p, y):
+    """I_k = CE(y^cons, y^k) : global_interaction sans le terme L_glob = CE(y, y^cons)."""
+    cons, _ = _global_consensus(ctx, outputs, log_p, raw_log_p)
+    return ce_soft(cons, log_p)                                      # (batch, K)
+
+
 @register_loss("global_interaction_kl")
 def global_interaction_kl(ctx, outputs, log_p, raw_log_p, y):
     """

@@ -32,7 +32,7 @@ python -m experiments.campaign quick_test --cpu
 ```bash
 source slurm/modules.sh
 python -m experiments.campaign alpha_sweep --list          # nombre de tâches N et commande exacte, sans rien lancer
-sbatch --array=0-169 slurm/campaign.sh alpha_sweep         # N tâches GPU en parallèle
+sbatch --array=0-229 slurm/campaign.sh alpha_sweep         # N tâches GPU en parallèle
 squeue -u $USER                                            # suivi ; sorties dans slurm_logs/
 ```
 
@@ -152,13 +152,13 @@ print(res["accuracy_consensus"], res["accuracy_agents"])
 |---|---|---|
 | `quick_test` | le code tourne-t-il ? | 8 |
 | `hyperparameter_search` | meilleurs lr, optimiseur, weight decay par dataset et architecture | 96 |
-| `alpha_sweep` | effet de α | 170 |
-| `lr_sweep` | effet du learning rate | 210 |
-| `tau_sweep` | effet de la température τ, poids w_k | 210 |
-| `k_sweep` | effet du nombre d'agents K | 280 |
-| `heterogeneous` | agents d'architectures différentes (resnet32+mobilenetv2…) | 90 |
+| `alpha_sweep` | effet de α | 230 |
+| `lr_sweep` | effet du learning rate | 290 |
+| `tau_sweep` | effet de la température τ, poids w_k | 310 |
+| `k_sweep` | effet du nombre d'agents K | 360 |
+| `heterogeneous` | agents d'architectures différentes (resnet32+mobilenetv2…) | 120 |
 
-Méthodes (`configs/methods/`) : `global_interaction`, `global_interaction_additive`, `global_interaction_kl`, `global_interaction_kl_additive`, `dml` ; α = 0 donne toujours les agents indépendants. Formules : [docs/GUIDE.md](docs/GUIDE.md#méthode).
+Méthodes (`configs/methods/`) : `global_interaction`, `global_interaction_additive`, `global_interaction_kl`, `global_interaction_kl_additive`, `local_interaction`, `local_interaction_additive`, `dml` ; α = 0 donne toujours les agents indépendants. Formules : [docs/GUIDE.md](docs/GUIDE.md#méthode).
 
 Nouvelle étude : copier une campagne et changer `methods`, `settings` ou `grid`. Essai sans toucher au fichier : `--set epochs=2 n_runs=1`.
 

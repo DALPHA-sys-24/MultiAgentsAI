@@ -1,0 +1,5 @@
+# Interaction locale, forme multiplicative : I_k = CE(y^cons, y^k) (global_interaction sans L_glob = CE(y, y^cons)).
+method: local_interaction
+loss_type: local_interaction
+loss_form: multiplicative
+strategy: simplicial

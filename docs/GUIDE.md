@@ -19,6 +19,7 @@ Chaque agent k a sa cross-entropy L_k = CE(y, y^k) et un terme d'interaction I_k
 | `global_interaction_additive` | additive | CE(y^cons, y^k) + CE(y, y^cons) |
 | `global_interaction_kl` | multiplicative | KL(y^cons ‖ y^k) + CE(y, y^cons) |
 | `global_interaction_kl_additive` | additive | KL(y^cons ‖ y^k) + CE(y, y^cons) |
+| `local_interaction` / `local_interaction_additive` | multiplicative / additive | CE(y^cons, y^k) (sans L_glob) |
 | `dml` | additive | moyenne des KL(y^j ‖ y^k), j ≠ k (Zhang et al., 2018) |
 | `independent` | additive | 0 : utilisée automatiquement pour α = 0 (cross-entropy seule, vote majoritaire) |
 
@@ -164,7 +165,7 @@ Loss `dml` : I_k = 1/(K−1) · Σ_{j≠k} KL(y^j ‖ y^k), les prédictions des
 python -m experiments.collaboration --config configs/methods/dml.yaml --alphas 0 1
 ```
 
-Dans une campagne : `methods: [global_interaction, dml]` (`alpha_sweep` et `lr_sweep` ont les 5 méthodes : les 4 variantes de l'interaction globale et la DML). Pour la variante multiplicative, créer `configs/methods/dml_multiplicative.yaml` (`defaults: [methods/dml]`, `method: dml_multiplicative`, `loss_form: multiplicative`) et l'ajouter à `methods:`.
+Dans une campagne : `methods: [global_interaction, dml]` (`alpha_sweep` et `lr_sweep` ont les 7 méthodes : les 6 variantes de l'interaction et la DML). Pour la variante multiplicative, créer `configs/methods/dml_multiplicative.yaml` (`defaults: [methods/dml]`, `method: dml_multiplicative`, `loss_form: multiplicative`) et l'ajouter à `methods:`.
 
 Deux différences avec le papier :
 - les K agents sont mis à jour en même temps à partir du même forward, alors que le papier les met à jour l'un après l'autre dans un pas (la mise à jour simultanée est celle de la plupart des implémentations publiques) ;
@@ -540,7 +541,7 @@ Un seul script sbatch pour toutes les campagnes. Depuis la racine du dépôt, su
 
 ```bash
 python -m experiments.campaign alpha_sweep --list         # N tâches, dossiers, données téléchargées
-sbatch --array=0-169 slurm/campaign.sh alpha_sweep        # la commande exacte est affichée par --list
+sbatch --array=0-229 slurm/campaign.sh alpha_sweep        # la commande exacte est affichée par --list
 ```
 
 - **Une tâche du job array = une tâche de la campagne** : un dataset × une méthode × un point de la grille × une graine, ou une graine du grand modèle, ou un worker Optuna. Les K agents d'un run sont dans la même tâche (loss commune). L'ordre des tâches est celui de `--list`.
@@ -555,12 +556,12 @@ Campagnes fournies :
 
 | Campagne | Contenu | Tâches |
 |---|---|---|
-| `alpha_sweep` | 4 variantes de l'interaction globale et DML, α ∈ {0, 1, 10, 100}, K = 3, 5 graines, 50 époques, grand modèle | 170 |
-| `lr_sweep` | 4 variantes de l'interaction globale et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 210 |
-| `tau_sweep` | 4 variantes de l'interaction globale, α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 210 |
-| `k_sweep` | K ∈ {2, 3, 5, 8}, 5 méthodes, α ∈ {0, 1}, cifar10 et cifar100, 50 époques, un grand modèle par K | 280 |
+| `alpha_sweep` | 6 variantes de l'interaction (globale, KL, locale) et DML, α ∈ {0, 1, 10, 100}, K = 3, 5 graines, 50 époques, grand modèle | 230 |
+| `lr_sweep` | 6 variantes de l'interaction (globale, KL, locale) et DML, α = 1, lr ∈ {0.1, 0.01, 0.001, 0.0001}, K = 3, 5 graines, grand modèle au lr* | 290 |
+| `tau_sweep` | 6 variantes de l'interaction (globale, KL, locale), α = 10, τ ∈ {0.1, 0.3, 1, 3, 10}, K = 3, 5 graines, 50 époques, poids w_k par classe | 310 |
+| `k_sweep` | K ∈ {2, 3, 5, 8}, 7 méthodes, α ∈ {0, 1}, cifar10 et cifar100, 50 époques, un grand modèle par K | 360 |
 | `hyperparameter_search` | resnet20, resnet32, resnet56, mobilenetv2 sur fashion_mnist, cifar10, cifar100, 8 workers × 10 essais | 96 |
-| `heterogeneous` | agents hétérogènes sur cifar100 : resnet32+mobilenetv2, resnet56+resnet20 et 2 × resnet32 (contrôle), 5 méthodes, α ∈ {0, 1}, 200 époques | 90 |
+| `heterogeneous` | agents hétérogènes sur cifar100 : resnet32+mobilenetv2, resnet56+resnet20 et 2 × resnet32 (contrôle), 7 méthodes, α ∈ {0, 1}, 200 époques | 120 |
 | `quick_test` | test local sur CPU (2 époques, 500 images) | 8 |
 
 ### Balayage du learning rate (`lr_sweep`)

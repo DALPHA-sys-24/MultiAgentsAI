@@ -55,7 +55,7 @@ def test_additive_form_alpha0_is_ce():
     np.testing.assert_allclose([float(v) for v in model.compute_losses(out, y)], expected.numpy(), rtol=1e-5)
 
 
-@pytest.mark.parametrize("loss_type", ["leave_one_out", "global_interaction", "global_interaction_kl",
+@pytest.mark.parametrize("loss_type", ["leave_one_out", "global_interaction", "global_interaction_kl", "local_interaction",
                                        "majority_hard"])
 def test_gradient_matches_finite_difference(loss_type):
     """Gradient TensorFlow vs différence finie, par rapport aux logits."""
@@ -163,3 +163,18 @@ def test_global_interaction_kl_trains_without_nan():
         model, x, y = make_model(k=3, loss_type="global_interaction_kl", alpha=10.0, form=form, jit_compile=False)
         hist = model.fit(x, y, epochs=2, batch_size=8, verbose=0).history
         assert all(np.isfinite(v) for v in hist["loss"])
+
+
+def test_local_interaction_is_global_without_l_glob():
+    rng = np.random.default_rng(4)
+    lo = tf.nn.log_softmax(tf.constant(rng.normal(size=(8, 3, 10)).astype("float32")), axis=-1)
+    p = tf.exp(lo)
+    y = tf.constant(rng.integers(0, 10, 8), tf.int32)
+    ctx = loss_lib.LossContext(num_agents=3, num_classes=10, temperature=0.7)
+    log_p = loss_lib.bounded_log_probs(p, lo)
+    i_glob = loss_lib.get_loss("global_interaction")(ctx, p, log_p, lo, y).numpy()
+    i_loc = loss_lib.get_loss("local_interaction")(ctx, p, log_p, lo, y).numpy()
+    w = loss_lib.confidence_weights(p, 0.7, lo).numpy()
+    cons = np.einsum("bk,bkc->bc", w, p.numpy())
+    l_glob = -np.log(cons[np.arange(8), y.numpy()])
+    np.testing.assert_allclose(i_loc, i_glob - l_glob[:, None], rtol=1e-5, atol=1e-5)
